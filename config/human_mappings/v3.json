@@ -1,0 +1,43 @@
+{
+  "description": "v3 human BVH skeleton with named toe joints. Spine4 is accepted as an alias for chest when present in motion BVHs.",
+  "mapping": {
+    "Hips": "hips",
+    "Spine3": "chest",
+    "Neck": "neck",
+    "Head": "head",
+    "LeftArm": "left_arm",
+    "LeftForeArm": "left_fore_arm",
+    "LeftHand": "left_hand",
+    "RightArm": "right_arm",
+    "RightForeArm": "right_fore_arm",
+    "RightHand": "right_hand",
+    "LeftUpLeg": "left_up_leg",
+    "LeftLeg": "left_leg",
+    "LeftFoot": "left_foot",
+    "LeftToeBase": "left_toe",
+    "RightUpLeg": "right_up_leg",
+    "RightLeg": "right_leg",
+    "RightFoot": "right_foot",
+    "RightToeBase": "right_toe"
+  },
+  "aliases": {
+    "Spine4": "chest"
+  },
+  "required": [
+    "hips",
+    "chest",
+    "neck",
+    "left_up_leg",
+    "left_leg",
+    "left_foot",
+    "right_up_leg",
+    "right_leg",
+    "right_foot",
+    "left_arm",
+    "left_fore_arm",
+    "left_hand",
+    "right_arm",
+    "right_fore_arm",
+    "right_hand"
+  ]
+}

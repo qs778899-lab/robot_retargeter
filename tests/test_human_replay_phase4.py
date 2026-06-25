@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import pickle
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_BVH = PROJECT_ROOT / "tests" / "fixtures" / "minimal_human_maya.bvh"
+
+
+class HumanReplayPhase4Test(unittest.TestCase):
+    def test_human_replay_help(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "scripts/human_replay.py", "--help"],
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--format", result.stdout)
+        self.assertIn("--input-bvh", result.stdout)
+
+    def test_single_bvh_no_viewer_smoke_generates_keypoints_pkl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/human_replay.py",
+                    "--format",
+                    "pns",
+                    "--input-bvh",
+                    str(FIXTURE_BVH),
+                    "--robot-config",
+                    "config/robot/g1.yaml",
+                    "--skeleton-config",
+                    "config/skeleton/skeleton.yaml",
+                    "--output-dir",
+                    str(output_dir),
+                    "--no-viewer",
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("[human-bvh-debug]", result.stdout)
+            self.assertIn("raw_height=", result.stdout)
+            self.assertIn("unit_scale=", result.stdout)
+            self.assertIn("up_axis=", result.stdout)
+            self.assertIn("lateral_axis=", result.stdout)
+            self.assertIn("forward_axis=", result.stdout)
+
+            output_path = output_dir / f"{FIXTURE_BVH.stem}_keypoints.pkl"
+            self.assertTrue(output_path.is_file())
+            with output_path.open("rb") as f:
+                payload = pickle.load(f)
+
+            for key in ("keypoint_names", "positions", "quaternions", "fps", "contact_names", "contact_states"):
+                self.assertIn(key, payload)
+            self.assertEqual(payload["positions"].shape[0], 2)
+            self.assertEqual(payload["positions"].shape[-1], 3)
+            self.assertEqual(payload["quaternions"].shape[0], 2)
+            self.assertEqual(payload["quaternions"].shape[-1], 4)
+            self.assertEqual(payload["contact_states"].shape, (2, 0))
+            self.assertEqual(len(payload["keypoint_names"]), payload["positions"].shape[1])
+
+
+if __name__ == "__main__":
+    unittest.main()
