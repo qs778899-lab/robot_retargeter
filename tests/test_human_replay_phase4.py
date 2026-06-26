@@ -70,6 +70,19 @@ class HumanReplayPhase4Test(unittest.TestCase):
             self.assertEqual(payload["quaternions"].shape[-1], 4)
             self.assertEqual(payload["contact_states"].shape, (2, 0))
             self.assertEqual(len(payload["keypoint_names"]), payload["positions"].shape[1])
+            orientation_scales = payload["ik_orientation_cost_scales"]
+            self.assertEqual(orientation_scales["left_arm"], 0.0)
+            self.assertEqual(orientation_scales["right_fore_arm"], 0.0)
+            self.assertIn("z_shift=", result.stdout)
+
+            keypoint_idx = {name: idx for idx, name in enumerate(payload["keypoint_names"])}
+            support_z = payload["positions"][
+                :,
+                [keypoint_idx["left_calf"], keypoint_idx["right_calf"]],
+                2,
+            ]
+            self.assertLess(float(support_z.min()), 0.1)
+            self.assertGreater(float(support_z.min()), -1e-4)
 
 
 if __name__ == "__main__":

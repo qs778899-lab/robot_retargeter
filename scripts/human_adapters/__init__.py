@@ -3,6 +3,7 @@
 from .base import AxisDebugInfo, BvhMotion, HumanMapping, HumanSemanticMotion, SourceMotion
 from .bvh_parser import (
     MAYA_TO_MUJOCO,
+    axis_transform_to_mujoco,
     compute_axis_debug_info,
     infer_unit_scale,
     load_bvh,
@@ -19,6 +20,7 @@ __all__ = [
     "MAYA_TO_MUJOCO",
     "REPLAY_BODY_NAMES",
     "SourceMotion",
+    "axis_transform_to_mujoco",
     "compute_axis_debug_info",
     "infer_unit_scale",
     "load_bvh",

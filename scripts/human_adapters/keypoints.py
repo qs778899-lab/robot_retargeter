@@ -33,8 +33,11 @@ SKELETON_BODY_NAMES = [
 ]
 
 DERIVED_BODY_CENTERS = {
-    "hips_mean": ("left_up_leg", "right_up_leg"),
-    "shoulder_mean": ("left_arm", "right_arm"),
+    "hips_mean": (("left_up_leg", "right_up_leg"),),
+    "shoulder_mean": (
+        ("left_shoulder", "right_shoulder"),
+        ("left_arm", "right_arm"),
+    ),
 }
 
 REPLAY_BODY_NAMES = SKELETON_BODY_NAMES + list(DERIVED_BODY_CENTERS.keys())
@@ -69,8 +72,14 @@ def motion_to_semantic(
         quaternions[:, target_idx, :] = motion.quaternions[:, source_idx, :]
         filled.add(target_name)
 
-    _derive_center("hips_mean", ("left_up_leg", "right_up_leg"), positions, quaternions, filled)
-    _derive_center("shoulder_mean", ("left_arm", "right_arm"), positions, quaternions, filled)
+    _derive_center("hips_mean", DERIVED_BODY_CENTERS["hips_mean"], positions, quaternions, filled)
+    _derive_center(
+        "shoulder_mean",
+        DERIVED_BODY_CENTERS["shoulder_mean"],
+        positions,
+        quaternions,
+        filled,
+    )
     _derive_spine_points(positions, quaternions, filled, warnings)
     _derive_head(positions, quaternions, filled, warnings)
     _derive_toe("left_toe", "left_foot", positions, quaternions, filled, warnings)
@@ -88,22 +97,25 @@ def motion_to_semantic(
 
 def _derive_center(
     target: str,
-    sources: tuple[str, str],
+    source_options: tuple[tuple[str, str], ...],
     positions: np.ndarray,
     quaternions: np.ndarray,
     filled: set[str],
 ) -> None:
     if target in filled:
         return
-    target_idx = REPLAY_BODY_NAMES.index(target)
-    left_idx = REPLAY_BODY_NAMES.index(sources[0])
-    right_idx = REPLAY_BODY_NAMES.index(sources[1])
-    if sources[0] in filled and sources[1] in filled:
+    for sources in source_options:
+        if sources[0] not in filled or sources[1] not in filled:
+            continue
+        target_idx = REPLAY_BODY_NAMES.index(target)
+        left_idx = REPLAY_BODY_NAMES.index(sources[0])
+        right_idx = REPLAY_BODY_NAMES.index(sources[1])
         positions[:, target_idx, :] = 0.5 * (positions[:, left_idx, :] + positions[:, right_idx, :])
         quaternions[:, target_idx, :] = _average_quaternions(
             quaternions[:, left_idx, :], quaternions[:, right_idx, :]
         )
         filled.add(target)
+        return
 
 
 def _derive_spine_points(

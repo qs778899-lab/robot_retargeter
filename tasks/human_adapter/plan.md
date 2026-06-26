@@ -214,7 +214,7 @@ HumanMotionSemantic(
 
 - `hips` 使用源 `Hips`。
 - `hips_mean` 优先取 `left_up_leg` 与 `right_up_leg` 平均；若缺失则 fallback 到 `hips`。
-- `shoulder_mean` 取 `left_arm` 与 `right_arm` 平均；若缺失则 fallback 到 `chest`。
+- `shoulder_mean` 优先取 `left_shoulder` 与 `right_shoulder` 平均；若源 BVH 没有真实肩点，再回退到 `left_arm` 与 `right_arm` 平均，最后 fallback 到 `chest`。
 - `spine1` / `spine2` 对 PNS/v3 不一定直接存在，可在 `hips -> chest` 上插值生成。
 - `chest`：
   - PNS: `Spine2`
@@ -236,21 +236,23 @@ HumanMotionSemantic(
 四元数策略：
 
 - 按 BVH `CHANNELS` 声明顺序组合 local Euler rotation，做 FK 得到各 joint world quaternion。
+- FK 中如果 node 有 `X/Y/Zposition` channel，使用该 translation 作为 local position；没有 position channel 时才使用 `OFFSET`。不能把 position channel 和 OFFSET 双加。
 - 输出统一为 wxyz。
 - 派生点策略：
   - `hips_mean` 使用左右髋四元数平均，缺失时用 `hips`。
   - `shoulder_mean` 使用左右肩/上臂四元数平均，缺失时用 `chest`。
   - 插值 spine 可先用相邻父节点四元数，后续再升级为 slerp。
 - 继续复用机器人 YAML 的 `key_frame_config` 做轴映射和局部 offset。
+- human BVH 手臂 roll/orientation 与目标机器人肩肘自由度可能不兼容。`human_replay.py` 写出的 pkl 可携带 `ik_orientation_cost_scales`，默认关闭手臂相关 keypoint 的 orientation cost，让 IK 优先满足 elbow/wrist 位置。
 
 坐标系策略：
 
 - 先按项目级 `AGENTS.md` 触发规则读取 `docs/human_bvh_intake.md`，实证判定 up/lateral/forward；不能只靠格式名假设。
-- PNS/v3 BVH 初始假设按 Maya/MotionBuilder 风格处理：Y-up、+Z forward，但必须通过 Head-Foot、Left-Right、foot-to-toe/End Site 统计确认。
+- PNS/v3 BVH 不能固定套用 Maya/MotionBuilder 矩阵；必须通过 Head-Foot、Left-Right、foot-to-toe/End Site 统计确认。
 - `robot_retargeter` 内部保持 MuJoCo 风格：Z-up、+X forward。
 - adapter 边界做显式轴变换，并在 `human_replay.py` 提供：
-  - `--facing-direction Maya|Mujoco`
-  - 默认 `Maya`
+  - `--facing-direction auto|Maya|Mujoco`
+  - 默认 `auto`，根据实测 `forward_axis/lateral_axis/up_axis` 构造 source -> MuJoCo 矩阵。
 - 坐标变换必须同时作用于 positions 和 quaternions。
 
 单位策略：
@@ -258,6 +260,12 @@ HumanMotionSemantic(
 - 先按 `docs/human_bvh_intake.md` 的单位规则计算原始 BVH 身高并记录 `raw_height`、`unit_scale`、判定依据。
 - PNS 样例 `pick_up/pick__up745_chr00.bvh` 的 Hips 高度约 `97.12`，腿段 offset 约 `45 + 42`，整体量级更像厘米；该类数据接入时应重点验证是否需要 `--unit-scale 0.01`。
 - 提供 `--unit-scale`，默认可以是 `auto` 或显式数值；若使用 `auto`，必须打印判定结果，不能静默转换。
+
+地面对齐策略：
+
+- BVH FK 转成目标机器人 keypoints 后，不能保留源 BVH 的世界坐标 root offset。
+- `human_replay.py` 在写出 pkl 前，使用目标机器人模型初始 `left_calf/right_calf` 对应 child body 的最低 Z 作为支撑高度，把 keypoints 中对应支撑点的最低 Z 平移到该高度。
+- debug 必须记录 `ground_links`、`observed_ground_z`、`target_ground_z` 和 `z_shift`。
 - 如果源 BVH 身高明显大于合理人体米制范围，例如 > 10，可提示或自动选择 `unit_scale=0.01`，但必须记录到日志。
 
 ## PNS BVH 接入计划

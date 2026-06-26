@@ -123,11 +123,12 @@ class RobotRetarget:
         self.body_name_to_contact_task = {}
         self.contact_targets = []
         self.current_contact_points = []
+        self.effective_orientation_costs = {}
 
         self.robot_motor_names = {}
 
-        self.setup_retarget_configuration()
         self.load_keypoints()
+        self.setup_retarget_configuration()
         self.setup_contact_targets()
 
     def _normalize_contact_body_names(self, contact_body_names):
@@ -227,6 +228,11 @@ class RobotRetarget:
         self.keypoints_pos = keypoints_data["positions"] 
         self.keypoints_quat = keypoints_data["quaternions"]  
         self.contact_names = keypoints_data.get("contact_names", [])
+        self.orientation_cost_scales = keypoints_data.get("ik_orientation_cost_scales", {})
+        if self.orientation_cost_scales is None:
+            self.orientation_cost_scales = {}
+        if not isinstance(self.orientation_cost_scales, dict):
+            raise TypeError("ik_orientation_cost_scales must be a dict when provided")
         self.contact_state_name_to_idx = {
             contact_name: idx for idx, contact_name in enumerate(self.contact_names)
         }
@@ -250,6 +256,10 @@ class RobotRetarget:
 
         for keypoint_name, entry in self.ik_match_table.items():
             robot_frame, pos_weight, rot_weight = entry
+            rot_weight = float(rot_weight) * float(
+                self.orientation_cost_scales.get(keypoint_name, 1.0)
+            )
+            self.effective_orientation_costs[keypoint_name] = rot_weight
             if pos_weight != 0 or rot_weight != 0:
                 task = mink.FrameTask(
                     frame_name=robot_frame,
@@ -447,6 +457,7 @@ class RobotRetarget:
             target_pos, target_quat = self._get_target_pose(frame_idx, keypoint_name)
             task.set_target(mink.SE3.from_rotation_and_translation(mink.SO3(target_quat), target_pos))
             robot_frame, pos_weight, rot_weight = self.ik_match_table[keypoint_name]
+            rot_weight = self.effective_orientation_costs.get(keypoint_name, rot_weight)
             self.current_targets.append(
                 {
                     "pos": np.asarray(target_pos, dtype=np.float64),

@@ -181,6 +181,7 @@ def _fk_node(
 ) -> None:
     translation = np.zeros(3, dtype=np.float64)
     local_rot = Rotation.identity()
+    has_position_channels = False
     if not node.is_end_site:
         values = frame[
             channel_offsets[id(node)] : channel_offsets[id(node)] + len(node.channels)
@@ -188,13 +189,14 @@ def _fk_node(
         for channel, value in zip(node.channels, values):
             axis = channel[0].lower()
             if channel.endswith("position"):
+                has_position_channels = True
                 translation["xyz".index(axis)] = value
             elif channel.endswith("rotation"):
                 local_rot = local_rot * Rotation.from_euler(axis, value, degrees=True)
             else:
                 raise ValueError(f"Unsupported BVH channel: {channel}")
 
-    local_pos = node.offset + translation
+    local_pos = translation if has_position_channels else node.offset
     world_pos = parent_pos + parent_rot.apply(local_pos)
     world_rot = parent_rot * local_rot
 
@@ -219,11 +221,31 @@ def _fk_node(
 def infer_unit_scale(raw_height: float) -> tuple[float, str]:
     if 1.0 <= raw_height <= 2.5:
         return 1.0, "raw_height is in meter-scale human range"
-    if 100.0 <= raw_height <= 250.0:
+    if 80.0 <= raw_height <= 400.0:
         return 0.01, "raw_height is in centimeter-scale human range"
-    if 1000.0 <= raw_height <= 2500.0:
+    if 800.0 <= raw_height <= 4000.0:
         return 0.001, "raw_height is in millimeter-scale human range"
     return 1.0, "raw_height is outside standard ranges; unit_scale left explicit"
+
+
+def axis_transform_to_mujoco(debug_info: AxisDebugInfo) -> np.ndarray:
+    """Build a source->MuJoCo axis transform from measured BVH axes."""
+
+    transform = np.zeros((3, 3), dtype=np.float64)
+    for target_axis_idx, source_axis in enumerate(
+        (debug_info.forward_axis, debug_info.lateral_axis, debug_info.up_axis)
+    ):
+        sign, axis_name = _parse_signed_axis(source_axis)
+        transform[target_axis_idx, AXIS_NAMES.index(axis_name)] = sign
+
+    determinant = round(float(np.linalg.det(transform)))
+    if abs(determinant) != 1:
+        raise ValueError(f"Invalid axis transform from debug info: {debug_info}")
+    if determinant < 0:
+        raise ValueError(
+            "BVH axes form a left-handed transform; verify forward/lateral/up debug output"
+        )
+    return transform
 
 
 def transform_motion(
@@ -346,3 +368,9 @@ def _dominant_axis(vector: np.ndarray) -> str:
     idx = int(np.argmax(np.abs(vector)))
     sign = "+" if vector[idx] >= 0.0 else "-"
     return f"{sign}{AXIS_NAMES[idx]}"
+
+
+def _parse_signed_axis(axis: str) -> tuple[float, str]:
+    if len(axis) != 2 or axis[0] not in {"+", "-"} or axis[1] not in AXIS_NAMES:
+        raise ValueError(f"Invalid signed axis: {axis!r}")
+    return (1.0 if axis[0] == "+" else -1.0), axis[1]
