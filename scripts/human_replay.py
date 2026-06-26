@@ -72,6 +72,13 @@ BVH_IK_ORIENTATION_COST_SCALES = {
     "right_fore_arm": 0.0,
 }
 
+FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT = {
+    "pns": {
+        "left_calf": "left_foot",
+        "right_calf": "right_foot",
+    },
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -483,6 +490,34 @@ def align_keypoints_to_robot_ground(
     return aligned, z_shift, observed_min, desired_min, support_links
 
 
+def apply_format_foot_orientation_overrides(
+    *,
+    source_format: str,
+    keypoint_names: list[str],
+    keypoint_quaternions: np.ndarray,
+    semantic_quaternions: np.ndarray,
+    semantic_names: list[str],
+    key_frame_offsets: dict[str, np.ndarray],
+    key_frame_axis_maps: dict[str, np.ndarray],
+) -> np.ndarray:
+    overrides = FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT.get(source_format)
+    if not overrides:
+        return keypoint_quaternions
+
+    keypoint_idx = {name: idx for idx, name in enumerate(keypoint_names)}
+    semantic_idx = {name: idx for idx, name in enumerate(semantic_names)}
+    adjusted = keypoint_quaternions.copy()
+    for keypoint_name, semantic_foot_name in overrides.items():
+        if keypoint_name not in keypoint_idx or semantic_foot_name not in semantic_idx:
+            continue
+        adjusted[:, keypoint_idx[keypoint_name], :] = apply_axis_map_and_local_euler_offset_wxyz(
+            semantic_quaternions[:, semantic_idx[semantic_foot_name], :],
+            key_frame_axis_maps.get(semantic_foot_name, np.eye(3, dtype=np.float32)),
+            key_frame_offsets.get(semantic_foot_name, np.zeros(3, dtype=np.float32)),
+        )
+    return adjusted
+
+
 def save_keypoints_pkl(
     output_path: Path,
     *,
@@ -558,6 +593,15 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         keypoints=keypoints,
         robot_links=robot_links,
         robot_body_positions=robot_body_positions,
+    )
+    quaternions = apply_format_foot_orientation_overrides(
+        source_format=args.format,
+        keypoint_names=keypoint_names,
+        keypoint_quaternions=quaternions,
+        semantic_quaternions=semantic_quaternions,
+        semantic_names=semantic.body_names,
+        key_frame_offsets=key_frame_offsets,
+        key_frame_axis_maps=key_frame_axis_maps,
     )
 
     output_dir = args.output_dir

@@ -117,3 +117,32 @@
   - 检查 root yaw/hips_mean orientation 是否应参与 position target 的局部化或 foot target 的 facing correction。
   - 检查 PNS synthetic toe/foot End Site 是否适合作为腿部/接触参考，必要时把 contact/ground alignment 从 ankle/calf 扩展到 toe/foot_end。
 - 版本管理：当前准备提交一个已验证修复 commit，范围包括 v3 正常化、FK double-offset 修复、手臂 orientation override 和文档/测试门禁；PNS 腿部问题作为后续 commit 单独处理。
+
+## 2026-06-26：撤回 root orientation override，改为 PNS foot orientation 语义修复
+
+- 用户复查后反馈：`2c0c1f6` 的 root/Hips orientation override 让 PNS 和 v3 的腿都变差，小腿和脚尖朝向不对。
+- 已执行 `git revert 2c0c1f6`，撤回 root orientation override 方案；重新生成 PNS/v3 标准输出，v3 回到此前确认正常的链路。
+- 重新对照 `soma-retargeter`：
+  - PNS mapping 只到 `LeftFoot/RightFoot`，没有命名 toe；soma 把 `LeftFoot/RightFoot` 作为足部旋转目标，而不是用小腿方向代替足部方向。
+  - `robot_retargeter` 当前 `left_calf/right_calf` keypoint 实际约束的是 G1 的 `left/right_ankle_roll_link`。视觉上的脚尖方向由 ankle/foot body orientation 决定。
+- 根因：
+  - `human_replay.py` 之前给 `left_calf/right_calf` 生成 quaternion 时只使用 robot rest link 向量和 BVH knee->ankle 目标向量。
+  - 这能约束小腿段方向，但丢掉了 PNS `LeftFoot/RightFoot -> End Site` 的脚掌前向信息，导致转身时脚尖和小腿以下朝向异常。
+- 修复：
+  - 新增 `FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT`，仅 PNS 使用。
+  - PNS 的 `left_calf/right_calf` position 仍来自 knee->ankle 位置链；quaternion 改为由 semantic `left_foot/right_foot` orientation 经过 robot `key_frame_config` 转换得到。
+  - v3 不启用该 override，保持用户已确认正常的腿部链路。
+  - 未新增或恢复任何 PNS 腿部 IK cost 特判。
+- PNS 数值验证（`pick_up2274_chr00`，1835 帧，200 帧抽样）：
+  - `left_calf` position error mean/max：`0.0180 / 0.1138m`。
+  - `right_calf` position error mean/max：`0.0156 / 0.0670m`。
+  - robot pelvis-local 踝间距：`min=-0.0096, mean=0.3413, max=0.6406`，抽样交叉 `1/200`。
+  - robot toe vector pelvis-local X：`min=-0.1135, mean=0.0467, max=0.1175`；修复前均值为负，脚尖平均朝后。
+- v3 回归（`Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3`，208 帧，200 帧抽样）：
+  - `left_calf` position/rotation error mean/max：`0.0056/0.0096m`，`0.0021/0.0034rad`。
+  - `right_calf` position/rotation error mean/max：`0.0040/0.0073m`，`0.0031/0.0065rad`。
+  - robot pelvis-local 踝间距交叉 `0/200`，toe vector pelvis-local X mean `0.1152`。
+- 测试：
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m py_compile scripts/human_adapters/*.py scripts/human_replay.py scripts/robot_retarget.py`：通过。
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，12 个测试。
+- 当前状态：等待用户可视化复查 PNS `pick_up2274_chr00` 和 v3 回归；未把 followup 标记为 PASSED。
