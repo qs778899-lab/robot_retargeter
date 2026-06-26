@@ -72,14 +72,7 @@ def motion_to_semantic(
         quaternions[:, target_idx, :] = motion.quaternions[:, source_idx, :]
         filled.add(target_name)
 
-    _derive_center(
-        "hips_mean",
-        DERIVED_BODY_CENTERS["hips_mean"],
-        positions,
-        quaternions,
-        filled,
-        orientation_source="hips",
-    )
+    _derive_center("hips_mean", DERIVED_BODY_CENTERS["hips_mean"], positions, quaternions, filled)
     _derive_center(
         "shoulder_mean",
         DERIVED_BODY_CENTERS["shoulder_mean"],
@@ -108,7 +101,6 @@ def _derive_center(
     positions: np.ndarray,
     quaternions: np.ndarray,
     filled: set[str],
-    orientation_source: str | None = None,
 ) -> None:
     if target in filled:
         return
@@ -119,13 +111,9 @@ def _derive_center(
         left_idx = REPLAY_BODY_NAMES.index(sources[0])
         right_idx = REPLAY_BODY_NAMES.index(sources[1])
         positions[:, target_idx, :] = 0.5 * (positions[:, left_idx, :] + positions[:, right_idx, :])
-        if orientation_source is not None and orientation_source in filled:
-            source_idx = REPLAY_BODY_NAMES.index(orientation_source)
-            quaternions[:, target_idx, :] = quaternions[:, source_idx, :]
-        else:
-            quaternions[:, target_idx, :] = _average_quaternions(
-                quaternions[:, left_idx, :], quaternions[:, right_idx, :]
-            )
+        quaternions[:, target_idx, :] = _average_quaternions(
+            quaternions[:, left_idx, :], quaternions[:, right_idx, :]
+        )
         filled.add(target)
         return
 

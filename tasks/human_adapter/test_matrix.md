@@ -50,7 +50,6 @@
 - pkl 或生成日志包含地面对齐 debug 信息：`ground_links`、`observed_ground_z`、`target_ground_z`、`z_shift`。
 - pkl 支撑点高度门禁：生成后 `left_calf/right_calf` 最低 Z 应接近目标机器人对应踝端高度，不能保留 1m 级 BVH root/world offset。
 - human BVH pkl 必须携带 `ik_orientation_cost_scales`，手臂相关 keypoint 的 orientation scale 默认为 `0.0`，避免 BVH 手臂 roll 与目标机器人自由度冲突。
-- human BVH pkl 必须携带 `ik_orientation_cost_overrides["hips_mean"]`，使 BVH root/Hips orientation 能进入 robot IK；`hips_mean` quaternion 必须继承 root/Hips，且不能再套用 robot `key_frame_config` 的 axis map。
 
 ## phase_5：端到端 smoke 与可视化检查
 
@@ -79,5 +78,4 @@
   - sampled foot/toe Z min/mean/max。
   - `left_hip/right_hip/left_calf/right_calf` position/rotation error。
 - 若 robot 交叉脚与 keypoints 全局交叉一致，不能只调 IK 权重；必须先解释 keypoints 是否需要按 root/facing 局部化或修正足端目标。
-- 必须对照 `soma-retargeter` 的 PNS 链路确认：PNS 缺命名 toe 是可接受的，关键是 `Hips` 作为 pelvis 平移和旋转目标进入 IK；不得用 PNS 腿部 orientation cost 特判作为最终修复。
 - 修复后必须重新可视化 PNS `pick_up2274_chr00`，并记录用户或截图验证结果。

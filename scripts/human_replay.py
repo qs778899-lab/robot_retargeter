@@ -72,10 +72,6 @@ BVH_IK_ORIENTATION_COST_SCALES = {
     "right_fore_arm": 0.0,
 }
 
-BVH_IK_ORIENTATION_COST_OVERRIDES = {
-    "hips_mean": 8.0,
-}
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -411,7 +407,11 @@ def build_robot_keypoints(
 
     root_idx = semantic_idx["hips_mean"]
     keypoints[:, 0, :] = semantic_positions[:, root_idx, :]
-    quaternions[:, 0, :] = semantic_quaternions[:, root_idx, :]
+    quaternions[:, 0, :] = apply_axis_map_and_local_euler_offset_wxyz(
+        semantic_quaternions[:, root_idx, :],
+        key_frame_axis_maps.get("hips_mean", np.eye(3, dtype=np.float32)),
+        key_frame_offsets.get("hips_mean", np.zeros(3, dtype=np.float32)),
+    )
     retargeted["hips_mean"] = keypoints[:, 0, :]
 
     for output_idx, link_name in enumerate(robot_links, start=1):
@@ -491,7 +491,6 @@ def save_keypoints_pkl(
     quaternions: np.ndarray,
     fps: float,
     orientation_cost_scales: dict[str, float] | None = None,
-    orientation_cost_overrides: dict[str, float] | None = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -505,10 +504,6 @@ def save_keypoints_pkl(
     if orientation_cost_scales:
         payload["ik_orientation_cost_scales"] = {
             name: float(scale) for name, scale in orientation_cost_scales.items()
-        }
-    if orientation_cost_overrides:
-        payload["ik_orientation_cost_overrides"] = {
-            name: float(cost) for name, cost in orientation_cost_overrides.items()
         }
     with output_path.open("wb") as f:
         pickle.dump(payload, f)
@@ -579,7 +574,6 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         quaternions=quaternions,
         fps=semantic.fps,
         orientation_cost_scales=BVH_IK_ORIENTATION_COST_SCALES,
-        orientation_cost_overrides=BVH_IK_ORIENTATION_COST_OVERRIDES,
     )
 
     print(
