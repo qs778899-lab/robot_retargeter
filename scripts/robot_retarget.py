@@ -229,10 +229,15 @@ class RobotRetarget:
         self.keypoints_quat = keypoints_data["quaternions"]  
         self.contact_names = keypoints_data.get("contact_names", [])
         self.orientation_cost_scales = keypoints_data.get("ik_orientation_cost_scales", {})
+        self.orientation_cost_overrides = keypoints_data.get("ik_orientation_cost_overrides", {})
         if self.orientation_cost_scales is None:
             self.orientation_cost_scales = {}
+        if self.orientation_cost_overrides is None:
+            self.orientation_cost_overrides = {}
         if not isinstance(self.orientation_cost_scales, dict):
             raise TypeError("ik_orientation_cost_scales must be a dict when provided")
+        if not isinstance(self.orientation_cost_overrides, dict):
+            raise TypeError("ik_orientation_cost_overrides must be a dict when provided")
         self.contact_state_name_to_idx = {
             contact_name: idx for idx, contact_name in enumerate(self.contact_names)
         }
@@ -259,6 +264,8 @@ class RobotRetarget:
             rot_weight = float(rot_weight) * float(
                 self.orientation_cost_scales.get(keypoint_name, 1.0)
             )
+            if keypoint_name in self.orientation_cost_overrides:
+                rot_weight = float(self.orientation_cost_overrides[keypoint_name])
             self.effective_orientation_costs[keypoint_name] = rot_weight
             if pos_weight != 0 or rot_weight != 0:
                 task = mink.FrameTask(

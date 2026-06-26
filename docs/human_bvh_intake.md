@@ -52,6 +52,8 @@
 - BVH FK 处理 position channel 时不能把 `OFFSET` 和 `X/Y/Zposition` 盲目相加。若某个 joint 有 position channels，frame 数据通常已经表示该 joint 的 local translation；再加 OFFSET 会把骨长翻倍，表现为身高 300cm 级、ground shift 过大、腿/手姿态异常。
 - 不同 BVH 即使同属 v3/PNS，也不能固定套同一个 Maya 矩阵。应根据实测 `forward_axis/lateral_axis/up_axis` 构造 source -> MuJoCo 矩阵：source forward 映射到 target +X，source lateral 映射到 target +Y，source up 映射到 target +Z。
 - keypoints 输出前必须做地面对齐检查。至少用目标机器人左右踝端/足端对应 keypoints 的最低 Z 和机器人模型初始对应 body Z 做对齐，避免把 BVH 世界坐标 root offset 原样带入 IK，导致机器人悬空。
+- BVH root/Hips 的 orientation 必须作为骨盆/root 朝向单独处理。若项目内部使用 `hips_mean` 这类中心点，位置可以由左右髋平均得到，但 quaternion 应优先继承真实 root/Hips，而不是平均左右腿 quaternion；否则转身、抬腿、下蹲时腿部局部旋转会污染骨盆 facing。
+- 如果 BVH adapter 已经在输入边界把 position 和 quaternion 转成项目内部坐标系，保存 root quaternion 时不能再套用其他入口遗留的 key-frame axis map。二次轴变换会导致 root orientation 目标整体偏转，表现为转身时腿/脚局部关系异常。
 - 对 human BVH 手臂，位置目标通常比 roll/orientation 更可信。若手臂 orientation target 与目标机器人肩肘自由度冲突，应通过 keypoints payload 的 per-keypoint orientation scale 关闭或降低手臂 orientation cost，而不是牺牲 wrist/elbow 位置目标。
 
 建议转换顺序：
@@ -86,5 +88,6 @@ BVH adapter 或入口至少应输出：
 - retarget 后全身 IK 误差都大：优先查单位和坐标系；如果只有局部肢体异常，再查 mapping 或 BVH rotation order。
 - robot 在空中：优先查 keypoints pkl 中 `left_calf/right_calf` 或足端目标的最低 Z。如果最低 Z 仍在 1m 左右，说明 adapter 没有做 ground alignment，而不是 IK 本身的问题。
 - 身高异常到 300cm 级：优先检查 BVH parser 是否把非 root joint 的 `OFFSET` 和 position channel 双加。
+- 转身时大腿以下扭转或交叉脚：先查 root/Hips quaternion 是否进入了 robot IK，以及是否被二次 axis-map。对比 root/Hips yaw、`hips_mean` yaw、左右髋 lateral 向量 yaw；`hips_mean` yaw 不应来自左右腿 quaternion 平均。
 - 双臂肘部往身体中线凹陷：先查左右手臂目标相对 `shoulder_mean` 的 MuJoCo Y 符号。左臂应主要在 +Y，右臂应主要在 -Y；如果左右差异落在 X 或 Z，通常是 lateral/forward 轴映射错。若符号正确但肩中心偏移，再查 `LeftShoulder/RightShoulder` 是否接入 mapping，`shoulder_mean` 是否优先使用真实肩点。
 - 手臂位置目标正确但 robot 手臂仍内凹：对比关闭手臂 orientation cost 前后的 elbow/wrist 位置误差。若误差显著下降，说明 BVH 手臂 orientation/roll 与机器人自由度冲突，应保留位置目标、降低手臂 orientation cost。

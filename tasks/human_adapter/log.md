@@ -117,3 +117,38 @@
   - 检查 root yaw/hips_mean orientation 是否应参与 position target 的局部化或 foot target 的 facing correction。
   - 检查 PNS synthetic toe/foot End Site 是否适合作为腿部/接触参考，必要时把 contact/ground alignment 从 ankle/calf 扩展到 toe/foot_end。
 - 版本管理：当前准备提交一个已验证修复 commit，范围包括 v3 正常化、FK double-offset 修复、手臂 orientation override 和文档/测试门禁；PNS 腿部问题作为后续 commit 单独处理。
+
+## 2026-06-26：PNS 腿部根因修复，撤回腿部 cost 特判
+
+- 用户指出“关闭 PNS 腿部 orientation cost”不是本质修复，因为同一 PNS 骨架在 `soma-retargeter` 中可以正常 retarget。
+- 已执行 `git revert 3434605`，撤回 PNS 腿部 cost 特判提交；保留通用 FK、自动轴、ground alignment 和手臂 orientation scale 修复。
+- 对照 `/home/lab/Desktop/soma-retargeter`：
+  - `tools/mappings/pns.json` 明确 PNS “no toe joints”，只映射到 `LeftFoot/RightFoot`，toe 缺失由 retargeter 交集逻辑跳过。
+  - `soma_to_g1_retargeter_config.json` 中 `Hips` 映射到 robot `pelvis`，同时有平移目标 `t_weight=30.0` 和旋转目标 `r_weight=8.0`。
+  - soma 的 BVH loader 对有 position channel 的 joint 使用 channel translation，并按 root/Hips global quaternion 进入后续 scaler/IK。
+- 根因：
+  - `robot_retargeter` 的 BVH adapter 之前把 `hips_mean` quaternion 由左右腿 quaternion 平均得到。PNS 转身/抬腿时腿部 quaternion 会污染 pelvis facing。
+  - `g1.yaml` 中 `hips_mean` 原始 orientation cost 为 `0`，所以 BVH root/Hips orientation 没有进入 robot IK。
+  - 首次尝试接入 root orientation 后发现 root quaternion 又套用了 robot `key_frame_config` axis map；BVH adapter 已经在输入边界转成 MuJoCo 坐标，二次 axis-map 会导致 root target 整体偏转。
+- 修复：
+  - `scripts/human_adapters/keypoints.py`：`hips_mean` position 仍取左右髋中心，但 quaternion 优先继承真实 `hips`/root。
+  - `scripts/human_replay.py`：BVH root keypoint quaternion 直接使用已转换到 MuJoCo 的 semantic quaternion，不再套用 `key_frame_config` axis map。
+  - `scripts/human_replay.py` 写出通用 payload 字段 `ik_orientation_cost_overrides={"hips_mean": 8.0}`，与 soma 的 pelvis rotation weight 对齐。
+  - `scripts/robot_retarget.py` 读取可选 `ik_orientation_cost_overrides`；旧 pkl 不含该字段时行为不变，且没有写入 PNS/v3 私有路径或命名逻辑。
+- PNS 数值验证（`/home/lab/Downloads/pick_up/pick_up2274_chr00.bvh`，1835 帧，200 帧抽样）：
+  - `ik_orientation_cost_overrides`: `{"hips_mean": 8.0}`。
+  - `hips_mean` root rotation error mean/max：`0.0988 / 0.9913 rad`。
+  - 腿部位置误差：
+    - `left_hip mean/max = 0.0113 / 0.0924m`
+    - `left_calf mean/max = 0.0146 / 0.1390m`
+    - `right_hip mean/max = 0.0167 / 0.1171m`
+    - `right_calf mean/max = 0.0121 / 0.0586m`
+  - robot pelvis-local 左右踝 Y 间距：`min=-0.0608, mean=0.3409, max=0.6288`，抽样交叉 `3/200`；修复前同类抽样为 `55/200`。
+  - robot sampled ankle Z：`min=-0.0781, mean=0.0980, max=0.1727`。
+- v3 回归：
+  - `/home/lab/Desktop/soma-retargeter/assets/motions/v3_test/bvh/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3.bvh` 重新生成 keypoints 和 robot CSV。
+  - 输出 `output_data/robot_motion/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3_g1.csv`，shape `(208, 36)`。
+- 测试：
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m py_compile scripts/human_adapters/*.py scripts/human_replay.py scripts/robot_retarget.py`：通过。
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，13 个测试。
+- 当前状态：等待用户可视化复查 PNS `pick_up2274_chr00`；未把 followup 标记为 PASSED。

@@ -213,7 +213,8 @@ HumanMotionSemantic(
 内部语义骨架填充规则：
 
 - `hips` 使用源 `Hips`。
-- `hips_mean` 优先取 `left_up_leg` 与 `right_up_leg` 平均；若缺失则 fallback 到 `hips`。
+- `hips_mean` 的 position 优先取 `left_up_leg` 与 `right_up_leg` 平均；若缺失则 fallback 到 `hips`。
+- `hips_mean` 的 quaternion 必须优先继承真实 `hips`/root quaternion；不能平均左右腿 quaternion。PNS 转身、抬腿、下蹲时，左右腿 quaternion 会污染 pelvis/root facing。
 - `shoulder_mean` 优先取 `left_shoulder` 与 `right_shoulder` 平均；若源 BVH 没有真实肩点，再回退到 `left_arm` 与 `right_arm` 平均，最后 fallback 到 `chest`。
 - `spine1` / `spine2` 对 PNS/v3 不一定直接存在，可在 `hips -> chest` 上插值生成。
 - `chest`：
@@ -239,10 +240,10 @@ HumanMotionSemantic(
 - FK 中如果 node 有 `X/Y/Zposition` channel，使用该 translation 作为 local position；没有 position channel 时才使用 `OFFSET`。不能把 position channel 和 OFFSET 双加。
 - 输出统一为 wxyz。
 - 派生点策略：
-  - `hips_mean` 使用左右髋四元数平均，缺失时用 `hips`。
+  - `hips_mean` position 使用左右髋平均，quaternion 使用 `hips`/root；缺失 root 时才降级。
   - `shoulder_mean` 使用左右肩/上臂四元数平均，缺失时用 `chest`。
   - 插值 spine 可先用相邻父节点四元数，后续再升级为 slerp。
-- 继续复用机器人 YAML 的 `key_frame_config` 做轴映射和局部 offset。
+- BVH adapter 已在输入边界把 quaternion 转成 MuJoCo 坐标后，root quaternion 不能再套用其他入口遗留的 `key_frame_config` axis map；二次轴变换会导致转身时腿部局部关系异常。
 - human BVH 手臂 roll/orientation 与目标机器人肩肘自由度可能不兼容。`human_replay.py` 写出的 pkl 可携带 `ik_orientation_cost_scales`，默认关闭手臂相关 keypoint 的 orientation cost，让 IK 优先满足 elbow/wrist 位置。
 
 坐标系策略：
@@ -538,4 +539,4 @@ python scripts/robot_retarget.py \
 - 不引入 Blender。
 - 不做 BVH-FBX 骨架一致性校验。
 - 不迁移 `soma-retargeter` 的 SOMA scaler、`retarget_bvh.py` 或 motion_lib PKL。
-- 不把 PNS/v3 格式逻辑写进 `scripts/robot_retarget.py`。
+- `scripts/robot_retarget.py` 只允许读取通用 keypoints payload 字段，例如 per-keypoint orientation scale/override；不得写入 PNS/v3 名称或路径逻辑。

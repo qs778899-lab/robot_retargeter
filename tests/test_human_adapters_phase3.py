@@ -64,6 +64,39 @@ class HumanAdapterPhase3Test(unittest.TestCase):
         source_head_idx = motion.joint_names.index("Head")
         self.assertTrue(np.allclose(semantic.positions[:, head_idx, :], motion.positions[:, source_head_idx, :]))
 
+    def test_hips_mean_position_uses_legs_but_quaternion_uses_root(self) -> None:
+        motion = load_bvh(FIXTURE_BVH)
+        root_idx = motion.joint_names.index("Hips")
+        left_idx = motion.joint_names.index("LeftUpLeg")
+        right_idx = motion.joint_names.index("RightUpLeg")
+        quaternions = motion.quaternions.copy()
+        quaternions[:, root_idx, :] = np.array([0.70710677, 0.0, 0.0, 0.70710677], dtype=np.float32)
+        quaternions[:, left_idx, :] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        quaternions[:, right_idx, :] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        motion = type(motion)(
+            path=motion.path,
+            joint_names=motion.joint_names,
+            positions=motion.positions,
+            quaternions=quaternions,
+            fps=motion.fps,
+            frame_time=motion.frame_time,
+        )
+        mapping = load_human_mapping(PROJECT_ROOT / "config" / "human_mappings" / "pns.json")
+        semantic = motion_to_semantic(motion, mapping)
+
+        names = {name: idx for idx, name in enumerate(semantic.body_names)}
+        expected_pos = 0.5 * (
+            semantic.positions[:, names["left_up_leg"], :]
+            + semantic.positions[:, names["right_up_leg"], :]
+        )
+        self.assertTrue(np.allclose(semantic.positions[:, names["hips_mean"], :], expected_pos))
+        self.assertTrue(
+            np.allclose(
+                semantic.quaternions[:, names["hips_mean"], :],
+                semantic.quaternions[:, names["hips"], :],
+            )
+        )
+
     def test_missing_head_and_toe_emit_warnings_and_fallbacks(self) -> None:
         motion = load_bvh(FIXTURE_BVH)
         mapping = load_human_mapping(PROJECT_ROOT / "config" / "human_mappings" / "pns.json")

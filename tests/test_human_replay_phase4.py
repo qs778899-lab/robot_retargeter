@@ -73,6 +73,8 @@ class HumanReplayPhase4Test(unittest.TestCase):
             orientation_scales = payload["ik_orientation_cost_scales"]
             self.assertEqual(orientation_scales["left_arm"], 0.0)
             self.assertEqual(orientation_scales["right_fore_arm"], 0.0)
+            orientation_overrides = payload["ik_orientation_cost_overrides"]
+            self.assertEqual(orientation_overrides["hips_mean"], 8.0)
             self.assertIn("z_shift=", result.stdout)
 
             keypoint_idx = {name: idx for idx, name in enumerate(payload["keypoint_names"])}
