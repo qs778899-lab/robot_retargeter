@@ -74,8 +74,8 @@ BVH_IK_ORIENTATION_COST_SCALES = {
 
 FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT = {
     "pns": {
-        "left_calf": "left_foot",
-        "right_calf": "right_foot",
+        "left_calf": ("left_foot", np.array([0.0, 90.0, 0.0], dtype=np.float32)),
+        "right_calf": ("right_foot", np.array([0.0, 90.0, 0.0], dtype=np.float32)),
     },
 }
 
@@ -507,13 +507,21 @@ def apply_format_foot_orientation_overrides(
     keypoint_idx = {name: idx for idx, name in enumerate(keypoint_names)}
     semantic_idx = {name: idx for idx, name in enumerate(semantic_names)}
     adjusted = keypoint_quaternions.copy()
-    for keypoint_name, semantic_foot_name in overrides.items():
+    for keypoint_name, (semantic_foot_name, local_offset_degrees) in overrides.items():
         if keypoint_name not in keypoint_idx or semantic_foot_name not in semantic_idx:
             continue
-        adjusted[:, keypoint_idx[keypoint_name], :] = apply_axis_map_and_local_euler_offset_wxyz(
+        base_quaternions = apply_axis_map_and_local_euler_offset_wxyz(
             semantic_quaternions[:, semantic_idx[semantic_foot_name], :],
             key_frame_axis_maps.get(semantic_foot_name, np.eye(3, dtype=np.float32)),
             key_frame_offsets.get(semantic_foot_name, np.zeros(3, dtype=np.float32)),
+        )
+        local_offset = Rotation.from_euler(
+            "xyz",
+            np.radians(local_offset_degrees.astype(np.float64)),
+        ).as_quat()[[3, 0, 1, 2]].astype(np.float32)
+        adjusted[:, keypoint_idx[keypoint_name], :] = multiply_quaternions_wxyz(
+            base_quaternions,
+            np.broadcast_to(local_offset, base_quaternions.shape),
         )
     return adjusted
 

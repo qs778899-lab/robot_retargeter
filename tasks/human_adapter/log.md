@@ -118,7 +118,7 @@
   - 检查 PNS synthetic toe/foot End Site 是否适合作为腿部/接触参考，必要时把 contact/ground alignment 从 ankle/calf 扩展到 toe/foot_end。
 - 版本管理：当前准备提交一个已验证修复 commit，范围包括 v3 正常化、FK double-offset 修复、手臂 orientation override 和文档/测试门禁；PNS 腿部问题作为后续 commit 单独处理。
 
-## 2026-06-26：撤回 root orientation override，改为 PNS foot orientation 语义修复
+## 2026-06-26：撤回 root orientation override，改为 PNS foot-frame orientation 语义修复
 
 - 用户复查后反馈：`2c0c1f6` 的 root/Hips orientation override 让 PNS 和 v3 的腿都变差，小腿和脚尖朝向不对。
 - 已执行 `git revert 2c0c1f6`，撤回 root orientation override 方案；重新生成 PNS/v3 标准输出，v3 回到此前确认正常的链路。
@@ -131,18 +131,43 @@
 - 修复：
   - 新增 `FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT`，仅 PNS 使用。
   - PNS 的 `left_calf/right_calf` position 仍来自 knee->ankle 位置链；quaternion 改为由 semantic `left_foot/right_foot` orientation 经过 robot `key_frame_config` 转换得到。
+  - 用户复查发现直接使用 PNS foot quaternion 后脚尖仍朝上。继续做 local offset 隔离后，PNS foot frame 到 G1 ankle frame 需要额外 local Y `+90deg` 校准；该校准只应用到 PNS 的 `left_calf/right_calf` orientation，不应用到 v3。
   - v3 不启用该 override，保持用户已确认正常的腿部链路。
   - 未新增或恢复任何 PNS 腿部 IK cost 特判。
-- PNS 数值验证（`pick_up2274_chr00`，1835 帧，200 帧抽样）：
-  - `left_calf` position error mean/max：`0.0180 / 0.1138m`。
-  - `right_calf` position error mean/max：`0.0156 / 0.0670m`。
-  - robot pelvis-local 踝间距：`min=-0.0096, mean=0.3413, max=0.6406`，抽样交叉 `1/200`。
-  - robot toe vector pelvis-local X：`min=-0.1135, mean=0.0467, max=0.1175`；修复前均值为负，脚尖平均朝后。
+- PNS 数值验证（`pick_up2274_chr00`，1835 帧，200 帧抽样，local Y `+90deg` 后）：
+  - robot pelvis-local 踝间距：`min=0.0450, mean=0.3434, max=0.6406`，抽样交叉 `0/200`。
+  - robot toe vector pelvis-local：`xmean=0.0362, zmean=-0.0290, zmax=0.1110`。
+  - robot foot-end vector pelvis-local：`xmean=-0.0234, zmean=-0.0226, zmax=0.0359`。
 - v3 回归（`Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3`，208 帧，200 帧抽样）：
-  - `left_calf` position/rotation error mean/max：`0.0056/0.0096m`，`0.0021/0.0034rad`。
-  - `right_calf` position/rotation error mean/max：`0.0040/0.0073m`，`0.0031/0.0065rad`。
-  - robot pelvis-local 踝间距交叉 `0/200`，toe vector pelvis-local X mean `0.1152`。
+  - robot pelvis-local 踝间距：`min=0.2185, mean=0.2200, max=0.2211`，抽样交叉 `0/200`。
+  - robot toe vector pelvis-local：`xmean=0.1152, zmean=-0.0202, zmax=0.0435`。
+  - robot foot-end vector pelvis-local：`xmean=-0.0451, zmean=-0.0317, zmax=-0.0169`。
 - 测试：
   - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m py_compile scripts/human_adapters/*.py scripts/human_replay.py scripts/robot_retarget.py`：通过。
   - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，12 个测试。
 - 当前状态：等待用户可视化复查 PNS `pick_up2274_chr00` 和 v3 回归；未把 followup 标记为 PASSED。
+
+## 2026-06-26：PNS foot-frame local offset 候选版重跑
+
+- 用户继续反馈：v3 `Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3` 脚已正常，但 PNS `pick_up2274_chr00` 大腿以下 global rotation 仍异常，脚尖看起来朝上。
+- 本轮没有恢复 root orientation override，也没有新增 PNS IK cost 特判；继续按 soma 语义使用 `LeftFoot/RightFoot` 足部旋转目标，并只在 PNS foot frame 到 G1 ankle frame 之间增加固定 local offset。
+- 代码状态：
+  - `FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT["pns"]` 将 `left_calf/right_calf` 的 quaternion 来源绑定到 semantic `left_foot/right_foot`。
+  - PNS foot frame -> G1 ankle frame 固定校准为 local Y `+90deg`。
+  - v3 不启用该 foot orientation override，保持已确认正常的几何 orientation 链路。
+- 重生成标准输出：
+  - PNS keypoints：`scripts/human_replay.py --format pns --input-bvh /home/lab/Downloads/pick_up/pick_up2274_chr00.bvh --robot-config config/robot/g1.yaml --skeleton-config config/skeleton/skeleton.yaml --output-dir output_data/keypoints/g1 --no-viewer`
+  - PNS retarget：`scripts/robot_retarget.py --config config/robot/g1.yaml --keypoints-name pick_up2274_chr00 --no-render-debug`
+  - v3 keypoints：`scripts/human_replay.py --format v3 --input-bvh /home/lab/Desktop/soma-retargeter/assets/motions/v3_test/bvh/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3.bvh --robot-config config/robot/g1.yaml --skeleton-config config/skeleton/skeleton.yaml --output-dir output_data/keypoints/g1 --no-viewer`
+  - v3 retarget：`scripts/robot_retarget.py --config config/robot/g1.yaml --keypoints-name Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3 --no-render-debug`
+- 输出：
+  - `output_data/robot_motion/pick_up2274_chr00_g1.csv`，shape `(1835, 36)`。
+  - `output_data/robot_motion/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3_g1.csv`，shape `(208, 36)`。
+- MuJoCo FK 抽样指标（200 帧）：
+  - PNS `pick_up2274_chr00`：pelvis-local ankle sep `min=0.0450, mean=0.3434, max=0.6406`，ankle cross `0/200`；toe-from-ankle pelvis-local `xmean=0.0362, zmean=-0.0290, zmax=0.1042`；foot-end pelvis-local `xmean=-0.0234, zmean=-0.0226, zmax=0.0277`。
+  - v3 `Hand-Reaching-62...`：pelvis-local ankle sep `min=0.2185, mean=0.2200, max=0.2211`，ankle cross `0/200`；toe-from-ankle pelvis-local `xmean=0.1152, zmean=-0.0202, zmax=0.0417`；foot-end pelvis-local `xmean=-0.0451, zmean=-0.0317, zmax=-0.0174`。
+- 测试：
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m py_compile scripts/human_adapters/*.py scripts/human_replay.py scripts/robot_retarget.py`：通过。
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，13 个测试。
+- 当前判断：
+  - 当前 PNS 候选版的 toe/foot_end 竖直均值已经向下，不再是整体脚尖朝上；但 PNS 仍有少数帧 toe 向量接近或略高于水平面，需要用户可视化复查后才能把 followup 标记为 PASSED。
