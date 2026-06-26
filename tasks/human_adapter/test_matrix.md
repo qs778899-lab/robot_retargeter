@@ -78,4 +78,6 @@
   - sampled foot/toe Z min/mean/max。
   - `left_hip/right_hip/left_calf/right_calf` position/rotation error。
 - 若 robot 交叉脚与 keypoints 全局交叉一致，不能只调 IK 权重；必须先解释 keypoints 是否需要按 root/facing 局部化或修正足端目标。
+- PNS 腿部 orientation 隔离门禁：若位置目标合理但大腿以下相对大腿扭转异常，必须比较关闭腿部 orientation cost 前后的髋/踝位置误差和 knee local separation。误差显著下降时，PNS 应保留腿部位置约束并关闭腿部 orientation cost。
+- PNS pkl 门禁：`ik_orientation_cost_scales` 必须关闭 `left/right_hip`、`left/right_thigh`、`left/right_calf`；v3 pkl 不应关闭腿部 orientation cost。
 - 修复后必须重新可视化 PNS `pick_up2274_chr00`，并记录用户或截图验证结果。

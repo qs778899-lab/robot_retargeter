@@ -10,6 +10,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_BVH = PROJECT_ROOT / "tests" / "fixtures" / "minimal_human_maya.bvh"
+V3_FIXTURE_BVH = PROJECT_ROOT / "tests" / "fixtures" / "minimal_human_v3_maya.bvh"
 
 
 class HumanReplayPhase4Test(unittest.TestCase):
@@ -73,6 +74,8 @@ class HumanReplayPhase4Test(unittest.TestCase):
             orientation_scales = payload["ik_orientation_cost_scales"]
             self.assertEqual(orientation_scales["left_arm"], 0.0)
             self.assertEqual(orientation_scales["right_fore_arm"], 0.0)
+            self.assertEqual(orientation_scales["left_hip"], 0.0)
+            self.assertEqual(orientation_scales["right_calf"], 0.0)
             self.assertIn("z_shift=", result.stdout)
 
             keypoint_idx = {name: idx for idx, name in enumerate(payload["keypoint_names"])}
@@ -83,6 +86,38 @@ class HumanReplayPhase4Test(unittest.TestCase):
             ]
             self.assertLess(float(support_z.min()), 0.1)
             self.assertGreater(float(support_z.min()), -1e-4)
+
+    def test_v3_bvh_keeps_leg_orientation_costs_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/human_replay.py",
+                    "--format",
+                    "v3",
+                    "--input-bvh",
+                    str(V3_FIXTURE_BVH),
+                    "--robot-config",
+                    "config/robot/g1.yaml",
+                    "--skeleton-config",
+                    "config/skeleton/skeleton.yaml",
+                    "--output-dir",
+                    str(output_dir),
+                    "--no-viewer",
+                ],
+                cwd=PROJECT_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with (output_dir / f"{V3_FIXTURE_BVH.stem}_keypoints.pkl").open("rb") as f:
+                payload = pickle.load(f)
+            orientation_scales = payload["ik_orientation_cost_scales"]
+            self.assertEqual(orientation_scales["left_arm"], 0.0)
+            self.assertNotIn("left_hip", orientation_scales)
+            self.assertNotIn("right_calf", orientation_scales)
 
 
 if __name__ == "__main__":

@@ -63,13 +63,23 @@ BODY_LOCAL_DIRECTIONS_MUJOCO = {
     "right_fore_arm": np.array([0.0, -1.0, 0.0], dtype=np.float32),
 }
 
-BVH_IK_ORIENTATION_COST_SCALES = {
+ARM_IK_ORIENTATION_COST_SCALES = {
     "left_shoulder": 0.0,
     "left_arm": 0.0,
     "left_fore_arm": 0.0,
     "right_shoulder": 0.0,
     "right_arm": 0.0,
     "right_fore_arm": 0.0,
+}
+
+PNS_IK_ORIENTATION_COST_SCALES = {
+    **ARM_IK_ORIENTATION_COST_SCALES,
+    "left_hip": 0.0,
+    "left_thigh": 0.0,
+    "left_calf": 0.0,
+    "right_hip": 0.0,
+    "right_thigh": 0.0,
+    "right_calf": 0.0,
 }
 
 
@@ -510,6 +520,12 @@ def save_keypoints_pkl(
     print(f"Saved keypoints to: {output_path}")
 
 
+def orientation_cost_scales_for_format(source_format: str) -> dict[str, float]:
+    if source_format == "pns":
+        return PNS_IK_ORIENTATION_COST_SCALES
+    return ARM_IK_ORIENTATION_COST_SCALES
+
+
 def convert_one(args: argparse.Namespace, source, mapping) -> Path:
     raw_motion = load_bvh(source.motion_bvh)
     raw_debug = compute_axis_debug_info(raw_motion)
@@ -573,7 +589,7 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         positions=keypoints,
         quaternions=quaternions,
         fps=semantic.fps,
-        orientation_cost_scales=BVH_IK_ORIENTATION_COST_SCALES,
+        orientation_cost_scales=orientation_cost_scales_for_format(args.format),
     )
 
     print(
