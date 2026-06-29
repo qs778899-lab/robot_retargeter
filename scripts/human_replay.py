@@ -72,10 +72,14 @@ BVH_IK_ORIENTATION_COST_SCALES = {
     "right_fore_arm": 0.0,
 }
 
-FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT = {
+FOOT_FRAME_KEYPOINTS_BY_FORMAT = {
     "pns": {
-        "left_calf": ("left_foot", np.array([0.0, 90.0, 0.0], dtype=np.float32)),
-        "right_calf": ("right_foot", np.array([0.0, 90.0, 0.0], dtype=np.float32)),
+        "left_calf": ("left_thigh", "left_calf", "left_foot", "left_toe"),
+        "right_calf": ("right_thigh", "right_calf", "right_foot", "right_toe"),
+    },
+    "v3": {
+        "left_calf": ("left_thigh", "left_calf", "left_foot", "left_toe"),
+        "right_calf": ("right_thigh", "right_calf", "right_foot", "right_toe"),
     },
 }
 
@@ -494,35 +498,50 @@ def apply_format_foot_orientation_overrides(
     *,
     source_format: str,
     keypoint_names: list[str],
+    keypoint_positions: np.ndarray,
     keypoint_quaternions: np.ndarray,
+    semantic_positions: np.ndarray,
     semantic_quaternions: np.ndarray,
     semantic_names: list[str],
     key_frame_offsets: dict[str, np.ndarray],
     key_frame_axis_maps: dict[str, np.ndarray],
 ) -> np.ndarray:
-    overrides = FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT.get(source_format)
+    overrides = FOOT_FRAME_KEYPOINTS_BY_FORMAT.get(source_format)
     if not overrides:
         return keypoint_quaternions
 
     keypoint_idx = {name: idx for idx, name in enumerate(keypoint_names)}
     semantic_idx = {name: idx for idx, name in enumerate(semantic_names)}
     adjusted = keypoint_quaternions.copy()
-    for keypoint_name, (semantic_foot_name, local_offset_degrees) in overrides.items():
-        if keypoint_name not in keypoint_idx or semantic_foot_name not in semantic_idx:
+    for keypoint_name, (knee_name, ankle_name, semantic_foot_name, semantic_toe_name) in overrides.items():
+        required_keypoints = (knee_name, ankle_name, keypoint_name)
+        required_semantic = (semantic_foot_name, semantic_toe_name)
+        if not all(name in keypoint_idx for name in required_keypoints):
             continue
-        base_quaternions = apply_axis_map_and_local_euler_offset_wxyz(
-            semantic_quaternions[:, semantic_idx[semantic_foot_name], :],
-            key_frame_axis_maps.get(semantic_foot_name, np.eye(3, dtype=np.float32)),
-            key_frame_offsets.get(semantic_foot_name, np.zeros(3, dtype=np.float32)),
-        )
-        local_offset = Rotation.from_euler(
-            "xyz",
-            np.radians(local_offset_degrees.astype(np.float64)),
-        ).as_quat()[[3, 0, 1, 2]].astype(np.float32)
-        adjusted[:, keypoint_idx[keypoint_name], :] = multiply_quaternions_wxyz(
-            base_quaternions,
-            np.broadcast_to(local_offset, base_quaternions.shape),
-        )
+        if not all(name in semantic_idx for name in required_semantic):
+            continue
+
+        knee = keypoint_positions[:, keypoint_idx[knee_name], :].astype(np.float64)
+        ankle = keypoint_positions[:, keypoint_idx[ankle_name], :].astype(np.float64)
+        foot = semantic_positions[:, semantic_idx[semantic_foot_name], :].astype(np.float64)
+        toe = semantic_positions[:, semantic_idx[semantic_toe_name], :].astype(np.float64)
+
+        z_axis = normalize_vectors(knee - ankle).astype(np.float64)
+        x_raw = toe - foot
+        x_axis = x_raw - np.sum(x_raw * z_axis, axis=-1, keepdims=True) * z_axis
+        x_norm = np.linalg.norm(x_axis, axis=-1, keepdims=True)
+        fallback_x = Rotation.from_quat(
+            keypoint_quaternions[:, keypoint_idx[keypoint_name], :][:, [1, 2, 3, 0]]
+        ).as_matrix()[:, :, 0]
+        x_axis = np.where(x_norm > 1e-8, x_axis, fallback_x)
+        x_axis = normalize_vectors(x_axis).astype(np.float64)
+        y_axis = normalize_vectors(np.cross(z_axis, x_axis)).astype(np.float64)
+        x_axis = normalize_vectors(np.cross(y_axis, z_axis)).astype(np.float64)
+
+        frame_mats = np.stack([x_axis, y_axis, z_axis], axis=-1)
+        adjusted[:, keypoint_idx[keypoint_name], :] = Rotation.from_matrix(frame_mats).as_quat()[
+            :, [3, 0, 1, 2]
+        ].astype(np.float32)
     return adjusted
 
 
@@ -605,7 +624,9 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
     quaternions = apply_format_foot_orientation_overrides(
         source_format=args.format,
         keypoint_names=keypoint_names,
+        keypoint_positions=keypoints,
         keypoint_quaternions=quaternions,
+        semantic_positions=semantic.positions,
         semantic_quaternions=semantic_quaternions,
         semantic_names=semantic.body_names,
         key_frame_offsets=key_frame_offsets,

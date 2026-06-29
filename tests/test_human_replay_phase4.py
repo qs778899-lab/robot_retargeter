@@ -7,25 +7,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import numpy as np
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_BVH = PROJECT_ROOT / "tests" / "fixtures" / "minimal_human_maya.bvh"
 
 
 class HumanReplayPhase4Test(unittest.TestCase):
-    def test_pns_foot_orientation_override_is_registered(self) -> None:
+    def test_bvh_foot_frame_orientation_overrides_are_registered(self) -> None:
         sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
         try:
-            from human_replay import FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT
+            from human_replay import FOOT_FRAME_KEYPOINTS_BY_FORMAT
         finally:
             sys.path.pop(0)
 
-        pns_overrides = FOOT_ORIENTATION_KEYPOINTS_BY_FORMAT["pns"]
-        self.assertEqual(pns_overrides["left_calf"][0], "left_foot")
-        self.assertEqual(pns_overrides["right_calf"][0], "right_foot")
-        self.assertTrue(np.allclose(pns_overrides["left_calf"][1], [0.0, 90.0, 0.0]))
-        self.assertTrue(np.allclose(pns_overrides["right_calf"][1], [0.0, 90.0, 0.0]))
+        for source_format in ("pns", "v3"):
+            overrides = FOOT_FRAME_KEYPOINTS_BY_FORMAT[source_format]
+            self.assertEqual(
+                overrides["left_calf"],
+                ("left_thigh", "left_calf", "left_foot", "left_toe"),
+            )
+            self.assertEqual(
+                overrides["right_calf"],
+                ("right_thigh", "right_calf", "right_foot", "right_toe"),
+            )
 
     def test_human_replay_help(self) -> None:
         result = subprocess.run(

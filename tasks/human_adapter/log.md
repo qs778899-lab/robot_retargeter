@@ -171,3 +171,38 @@
   - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，13 个测试。
 - 当前判断：
   - 当前 PNS 候选版的 toe/foot_end 竖直均值已经向下，不再是整体脚尖朝上；但 PNS 仍有少数帧 toe 向量接近或略高于水平面，需要用户可视化复查后才能把 followup 标记为 PASSED。
+
+## 2026-06-29：用户复查 `43bdd24` 失败，重新打开腿部 orientation 排查
+
+- 用户按以下两条命令复查后反馈：PNS `pick_up2274_chr00` 和 v3 `Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3` 两个 motion 的腿都异常，走路很奇怪，小腿和脚尖朝向不对。
+- 该反馈推翻了上一轮仅凭 FK 抽样指标选择 PNS local Y `+90deg` 的判断；`43bdd24` 暂标为失败候选，不能作为通过版本合并。
+- 需要重新排查：
+  - 当前可视化 CSV 是否确实由当前 commit 和当前 keypoints 重新生成，排除旧输出或错误输出被复用。
+  - `43bdd24` 代码只对 `source_format == "pns"` 应用 foot override，理论上不应改变 v3；v3 也异常说明要检查通用腿部 quaternion 构造、robot retarget 读取 payload、以及可视化 CSV 生成链路。
+  - 不能再用 “toe/foot_end 平均 z 向下” 作为充分判据；必须增加 link global rotation/foot local forward axis 与可视化一致的数值诊断。
+  - 在确认前不再推进 `followup_pns_leg` 状态。
+
+## 2026-06-29：废弃固定 foot offset，改为几何 foot-frame 构造
+
+- 继续排查结论：
+  - v3 的 pkl/csv 在 `1d5a492`、`f1505e1`、`d1f8e7c`、`43bdd24` 之间逐元素一致，说明 `43bdd24` 的 PNS-only local offset 不是 v3 输出变化的直接原因。
+  - PNS `pick_up2274_chr00` 在 `43bdd24` 标准输出的 frame 345 复现用户问题：`left/right_hip_yaw=-158deg`，`left/right_ankle_pitch=+30deg`，`left/right_ankle_roll=-15deg`，截图显示小腿和脚尖明显扭转。
+  - root yaw/full root rotation、单纯关闭腿部 orientation、单纯增加 knee position 权重、soma-like IK 权重都不能稳定解决；部分实验会让 hip_yaw 或 ankle_pitch 更严重。
+- 根因修正：
+  - 废弃 PNS foot frame -> G1 ankle frame local Y `+90deg` 固定 offset。
+  - 不再直接使用 source `LeftFoot/RightFoot` quaternion 作为 ankle/calf orientation。
+  - PNS/v3 共用几何 foot-frame 构造：`+Z = ankle -> knee`，`+X = foot -> toe/End Site` 投影到垂直于 `+Z` 的平面，`+Y = +Z cross +X`，再重正交化 `+X = +Y cross +Z`。
+  - 该构造同时使用小腿方向和脚掌前向，避免只用单一骨段向量导致绕小腿轴 twist 不确定。
+- 重生成标准输出：
+  - PNS：`output_data/robot_motion/pick_up2274_chr00_g1.csv`，shape `(1835, 36)`。
+  - v3：`output_data/robot_motion/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3_g1.csv`，shape `(208, 36)`。
+- 关键数值对比：
+  - PNS frame 345 修复前：`left/right_hip_yaw=-158deg`，`left/right_ankle_pitch=+30deg`，`left/right_ankle_roll=-15deg`。
+  - PNS frame 345 几何 foot-frame 后：`left_hip_yaw=-102.9deg`，`right_hip_yaw=-114.9deg`，`left_ankle_pitch=-6.0deg`，`right_ankle_pitch=-1.9deg`，`left_ankle_roll=0.8deg`，`right_ankle_roll=0.2deg`。
+  - v3 几何 foot-frame 后：hip_yaw 约 `[-8deg, +8deg]`，ankle_pitch 约 `[-5.4deg, -2.4deg]`，ankle_roll 约 `[-0.9deg, +0.6deg]`。
+- 可视化 artifact：
+  - 失败截图：`tasks/human_adapter/artifacts/pns_std_frame345_az135.png`。
+  - 修复后截图：`tasks/human_adapter/artifacts/pns_geomfoot_frame345_az135.png`。
+- 当前状态：
+  - 该版本比固定 offset 方案更符合几何约束，且数值上消除了 frame 345 的 ankle 极限扭转。
+  - PNS hip_yaw 仍偏大，不能仅凭数值宣布完成；等待用户用完整 viewer 命令复查。
