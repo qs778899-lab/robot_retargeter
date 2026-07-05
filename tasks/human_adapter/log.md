@@ -247,3 +247,13 @@
 - 当前状态：
   - 数值门禁通过，但按 `followup_pns_leg` 流程仍需用户重新可视化 `pick_up2274_chr00` 后才能标记 PASSED。
   - 当前会话 token 消耗无法从本地工具精确读取；本日志记录本轮关键诊断与测试结果，最终 COMPLETE 前需补充可获得的总 token 使用量或说明不可得原因。
+
+## 2026-07-05：用户确认 `0a9e956` 动作整体合理，转入 foot floating 修复
+
+- 用户可视化当前版本后确认：这版动作合理多了。
+- 当前版本节点：`0a9e956 Fix BVH thigh target frame twist`。
+- 仍存在问题：脚容易悬浮在空中。
+- 处理策略：
+  - 先保留 `0a9e956` 作为“动作整体合理但脚易悬浮”的明确基线。
+  - 后续修复聚焦 foot/contact/ground，不回退 thigh/knee frame 和 foot-frame 几何构造。
+  - 排查顺序：robot FK 足端高度分布、root z、keypoints `contact_states` 是否为空、`robot_retarget.py` contact target 是否真正接入。
