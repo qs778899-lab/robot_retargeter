@@ -78,5 +78,6 @@
   - sampled foot/toe Z min/mean/max。
   - `left_hip/right_hip/left_calf/right_calf` position/rotation error。
 - 若 robot 交叉脚与 keypoints 全局交叉一致，不能只调 IK 权重；必须先解释 keypoints 是否需要按 root/facing 局部化或修正足端目标。
+- BVH 大腿 orientation 门禁：`left_thigh/right_thigh` 对应 robot `knee_link`，其 quaternion 不能只由 `hip -> knee` 或 `knee -> hip` 单根大腿向量决定。PNS/v3 都应从几何构造 knee frame：`+Z = knee -> hip`，`+X = pelvis facing` 投影到垂直于 `+Z` 的平面，`+Y` 由右手系得到。修改该逻辑必须同时重跑 PNS/v3 数值门禁与可视化回归。
 - BVH 足部 orientation 门禁：`left_calf/right_calf` 对应 robot `ankle_roll_link`，其 quaternion 不能只由 knee->ankle 小腿向量决定，也不能只用 source foot quaternion 加固定 offset。PNS/v3 都应从几何构造 ankle frame：`+Z = ankle -> knee`，`+X = foot -> toe/End Site` 投影到垂直于 `+Z` 的平面，`+Y` 由右手系得到。修改该逻辑必须同时重跑 PNS/v3 数值门禁与可视化回归。
 - 修复后必须重新可视化 PNS `pick_up2274_chr00`，并记录用户或截图验证结果。

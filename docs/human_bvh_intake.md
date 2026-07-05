@@ -53,6 +53,7 @@
 - 不同 BVH 即使同属 v3/PNS，也不能固定套同一个 Maya 矩阵。应根据实测 `forward_axis/lateral_axis/up_axis` 构造 source -> MuJoCo 矩阵：source forward 映射到 target +X，source lateral 映射到 target +Y，source up 映射到 target +Z。
 - keypoints 输出前必须做地面对齐检查。至少用目标机器人左右踝端/足端对应 keypoints 的最低 Z 和机器人模型初始对应 body Z 做对齐，避免把 BVH 世界坐标 root offset 原样带入 IK，导致机器人悬空。
 - 若目标机器人 keypoint 名称是 calf/ankle 但实际约束的是 ankle/foot body，orientation 不能只由 knee->ankle 小腿向量决定，也不能只信任 source foot quaternion。对 PNS/v3 这类 BVH，应从几何构造 ankle frame：`+Z = ankle -> knee`，`+X = foot -> toe/End Site` 投影到垂直于 `+Z` 的平面，`+Y` 由右手系得到；toe 可以不作为强 position target，但必须可作为 foot orientation 依据。若脚尖仍整体朝上，应用 robot FK 的 toe/foot_end 世界方向和 ankle link global rotation 验证，不要直接调 IK cost。
+- 若目标机器人 keypoint 名称是 thigh/knee 但实际约束的是 knee body，orientation 不能只由 `hip -> knee` 或 `knee -> hip` 单根大腿向量决定；单向量只能确定一个轴，绕骨轴的 twist 未定义，转身时会把 hip_yaw/ankle 推到限位。对 PNS/v3 这类 BVH，应从几何构造 knee/thigh frame：`+Z = knee -> hip`，`+X = pelvis facing` 投影到垂直于 `+Z` 的平面，`+Y` 由右手系得到。
 - 对 human BVH 手臂，位置目标通常比 roll/orientation 更可信。若手臂 orientation target 与目标机器人肩肘自由度冲突，应通过 keypoints payload 的 per-keypoint orientation scale 关闭或降低手臂 orientation cost，而不是牺牲 wrist/elbow 位置目标。
 
 建议转换顺序：
@@ -88,5 +89,6 @@ BVH adapter 或入口至少应输出：
 - robot 在空中：优先查 keypoints pkl 中 `left_calf/right_calf` 或足端目标的最低 Z。如果最低 Z 仍在 1m 左右，说明 adapter 没有做 ground alignment，而不是 IK 本身的问题。
 - 身高异常到 300cm 级：优先检查 BVH parser 是否把非 root joint 的 `OFFSET` 和 position channel 双加。
 - 小腿方向大体跟随但脚尖朝向错误：检查 ankle/calf keypoint quaternion 是否误用 knee->ankle 向量构造。若 BVH 有 foot/toe/End Site，脚掌前向应参与 ankle/foot orientation。
+- 大腿以下 link 相对大腿扭转、hip_yaw 大面积接近限位、但左右脚位置没有镜像或交叉：检查 thigh/knee keypoint quaternion 是否只用单根大腿向量构造。正确构造必须用 pelvis facing 固定 twist。
 - 双臂肘部往身体中线凹陷：先查左右手臂目标相对 `shoulder_mean` 的 MuJoCo Y 符号。左臂应主要在 +Y，右臂应主要在 -Y；如果左右差异落在 X 或 Z，通常是 lateral/forward 轴映射错。若符号正确但肩中心偏移，再查 `LeftShoulder/RightShoulder` 是否接入 mapping，`shoulder_mean` 是否优先使用真实肩点。
 - 手臂位置目标正确但 robot 手臂仍内凹：对比关闭手臂 orientation cost 前后的 elbow/wrist 位置误差。若误差显著下降，说明 BVH 手臂 orientation/roll 与机器人自由度冲突，应保留位置目标、降低手臂 orientation cost。

@@ -206,3 +206,44 @@
 - 当前状态：
   - 该版本比固定 offset 方案更符合几何约束，且数值上消除了 frame 345 的 ankle 极限扭转。
   - PNS hip_yaw 仍偏大，不能仅凭数值宣布完成；等待用户用完整 viewer 命令复查。
+
+## 2026-07-05：修复 thigh/knee target twist 未定义
+
+- 用户复查 `pick_up2274_chr00` 和 `Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3` 后继续反馈：两条测试数据腿部姿势、朝向仍然奇怪，要求完整检查 retarget 流程细节。
+- 重新分层检查：
+  - BVH adapter 单位/轴：PNS `raw_height=170.274cm`、`unit_scale=0.01`、`up=+y/lateral=+x/forward=+z`；v3 `raw_height=152.202cm`、`unit_scale=0.01`、`up=+y/lateral=-z/forward=+x`。
+  - 对照 `soma-retargeter`：PNS 先 remap 到 SOMA joint，再通过 SOMA scaler 的 joint frame/offset 生成 G1 targets；不是只用单根骨段向量构造所有 link orientation。
+  - 验证失败候选：直接套 SOMA `joint_offsets` 到当前坐标系会让 PNS/v3 hip_yaw/ankle 更差；SOMA-like IK map 可降低部分足端高度但 PNS hip_yaw 仍会顶到 `+158deg`，不能作为根因修复。
+  - root/facing 隔离：PNS root-facing target 可让 root yaw 跟随约 `404deg` 转向，并降低 ankle 限位，但 hip_yaw 仍会残留限位；root orientation 不是唯一根因。
+- 根因：
+  - `left_thigh/right_thigh` 对应 G1 `knee_link`，但旧 quaternion 只由 `hip -> knee` 单根大腿向量间接构造。
+  - 单向量只能确定一个轴，绕大腿轴的 twist 未定义；转身时 IK 会用 hip_yaw/ankle 去追这个任意 twist，导致大腿以下 link 朝向异常。
+  - G1 rest frame 检查确认 `knee_link +Z` 指向 `knee -> hip`，`+X` 是脚掌/身体前向，因此 thigh/knee target 必须用第二参考向量固定 `+X`。
+- 修复：
+  - `scripts/human_replay.py` 新增 PNS/v3 共用 `THIGH_FRAME_KEYPOINTS_BY_FORMAT`。
+  - 新增 `apply_format_thigh_orientation_overrides()`：`+Z = knee -> hip`，`+X = pelvis facing` 投影到垂直于 `+Z` 的平面，`+Y = +Z cross +X`，再重正交化 `+X = +Y cross +Z`。
+  - 保留几何 foot-frame：`+Z = ankle -> knee`，`+X = foot -> toe/End Site`。
+  - 未新增 PNS 特殊 IK cost，未恢复 root orientation override。
+- 测试补充：
+  - `tests/test_human_replay_phase4.py` 增加 thigh-frame 注册检查。
+  - 新增 thigh-frame 轴向单元测试：验证 `left/right_thigh` 的 `+Z` 对齐 `knee -> hip`，`+X` 对齐 pelvis forward。
+  - `docs/human_bvh_intake.md` 和 `test_matrix.md` 增加 thigh/knee frame 门禁。
+- 重生成标准输出：
+  - PNS keypoints：`scripts/human_replay.py --format pns --input-bvh /home/lab/Downloads/pick_up/pick_up2274_chr00.bvh --robot-config config/robot/g1.yaml --skeleton-config config/skeleton/skeleton.yaml --output-dir output_data/keypoints/g1 --no-viewer`
+  - PNS retarget：`scripts/robot_retarget.py --config config/robot/g1.yaml --keypoints-name pick_up2274_chr00 --no-render-debug`
+  - v3 keypoints：`scripts/human_replay.py --format v3 --input-bvh /home/lab/Desktop/soma-retargeter/assets/motions/v3_test/bvh/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3.bvh --robot-config config/robot/g1.yaml --skeleton-config config/skeleton/skeleton.yaml --output-dir output_data/keypoints/g1 --no-viewer`
+  - v3 retarget：`scripts/robot_retarget.py --config config/robot/g1.yaml --keypoints-name Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3 --no-render-debug`
+- 数值门禁结果：
+  - PNS CSV 行数：`1835/1835`；v3 CSV 行数：`208/208`。
+  - PNS cross：`target_global=354`、`robot_global=356`、`target_local=0`、`robot_local=0`。全局 cross 来自动作转身坐标系，不是左右脚 local 反转。
+  - PNS sampled foot/toe Z：`min=-0.1646, mean=0.0686, max=0.2018`；toe-heel pelvis-local mean `xyz=[0.1526, 0.0143, -0.0169]`。
+  - PNS 关键关节：`left_hip_yaw [-11.2, 9.6, 31.0]deg`，`right_hip_yaw [-20.5, 0.4, 23.1]deg`；相比上一版 `-158deg` 限位问题已消除。
+  - PNS leg error：`left_thigh rot mean/max=14.8/58.0deg`，`left_calf=13.0/35.9deg`，`right_thigh=10.2/34.7deg`，`right_calf=6.8/45.6deg`。
+  - v3 cross 全部为 `0`；sampled foot/toe Z `min=-0.0030, mean=0.0097, max=0.0321`。
+  - v3 关键关节保持正常：hip_yaw 约 `[-7.0deg, +8.0deg]`，ankle pitch/roll 约 `[-5.4deg, +0.5deg]`。
+- 测试：
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m py_compile scripts/human_adapters/*.py scripts/human_replay.py scripts/robot_retarget.py`：通过。
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，14 个测试。
+- 当前状态：
+  - 数值门禁通过，但按 `followup_pns_leg` 流程仍需用户重新可视化 `pick_up2274_chr00` 后才能标记 PASSED。
+  - 当前会话 token 消耗无法从本地工具精确读取；本日志记录本轮关键诊断与测试结果，最终 COMPLETE 前需补充可获得的总 token 使用量或说明不可得原因。

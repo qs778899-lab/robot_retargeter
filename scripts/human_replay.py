@@ -83,6 +83,17 @@ FOOT_FRAME_KEYPOINTS_BY_FORMAT = {
     },
 }
 
+THIGH_FRAME_KEYPOINTS_BY_FORMAT = {
+    "pns": {
+        "left_thigh": ("left_hip", "left_thigh"),
+        "right_thigh": ("right_hip", "right_thigh"),
+    },
+    "v3": {
+        "left_thigh": ("left_hip", "left_thigh"),
+        "right_thigh": ("right_hip", "right_thigh"),
+    },
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -545,6 +556,55 @@ def apply_format_foot_orientation_overrides(
     return adjusted
 
 
+def apply_format_thigh_orientation_overrides(
+    *,
+    source_format: str,
+    keypoint_names: list[str],
+    keypoint_positions: np.ndarray,
+    keypoint_quaternions: np.ndarray,
+) -> np.ndarray:
+    overrides = THIGH_FRAME_KEYPOINTS_BY_FORMAT.get(source_format)
+    if not overrides:
+        return keypoint_quaternions
+
+    keypoint_idx = {name: idx for idx, name in enumerate(keypoint_names)}
+    if "left_hip" not in keypoint_idx or "right_hip" not in keypoint_idx:
+        return keypoint_quaternions
+
+    left_hip = keypoint_positions[:, keypoint_idx["left_hip"], :].astype(np.float64)
+    right_hip = keypoint_positions[:, keypoint_idx["right_hip"], :].astype(np.float64)
+    lateral = left_hip - right_hip
+    global_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    lateral = lateral - np.sum(lateral * global_up, axis=-1, keepdims=True) * global_up
+    lateral = normalize_vectors(lateral).astype(np.float64)
+    forward = normalize_vectors(np.cross(lateral, global_up)).astype(np.float64)
+
+    adjusted = keypoint_quaternions.copy()
+    for keypoint_name, (hip_name, knee_name) in overrides.items():
+        required_keypoints = (hip_name, knee_name, keypoint_name)
+        if not all(name in keypoint_idx for name in required_keypoints):
+            continue
+
+        hip = keypoint_positions[:, keypoint_idx[hip_name], :].astype(np.float64)
+        knee = keypoint_positions[:, keypoint_idx[knee_name], :].astype(np.float64)
+        z_axis = normalize_vectors(hip - knee).astype(np.float64)
+        x_axis = forward - np.sum(forward * z_axis, axis=-1, keepdims=True) * z_axis
+        x_norm = np.linalg.norm(x_axis, axis=-1, keepdims=True)
+        fallback_x = Rotation.from_quat(
+            keypoint_quaternions[:, keypoint_idx[keypoint_name], :][:, [1, 2, 3, 0]]
+        ).as_matrix()[:, :, 0]
+        x_axis = np.where(x_norm > 1e-8, x_axis, fallback_x)
+        x_axis = normalize_vectors(x_axis).astype(np.float64)
+        y_axis = normalize_vectors(np.cross(z_axis, x_axis)).astype(np.float64)
+        x_axis = normalize_vectors(np.cross(y_axis, z_axis)).astype(np.float64)
+
+        frame_mats = np.stack([x_axis, y_axis, z_axis], axis=-1)
+        adjusted[:, keypoint_idx[keypoint_name], :] = Rotation.from_matrix(frame_mats).as_quat()[
+            :, [3, 0, 1, 2]
+        ].astype(np.float32)
+    return adjusted
+
+
 def save_keypoints_pkl(
     output_path: Path,
     *,
@@ -620,6 +680,12 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         keypoints=keypoints,
         robot_links=robot_links,
         robot_body_positions=robot_body_positions,
+    )
+    quaternions = apply_format_thigh_orientation_overrides(
+        source_format=args.format,
+        keypoint_names=keypoint_names,
+        keypoint_positions=keypoints,
+        keypoint_quaternions=quaternions,
     )
     quaternions = apply_format_foot_orientation_overrides(
         source_format=args.format,

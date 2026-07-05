@@ -7,6 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+from scipy.spatial.transform import Rotation
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_BVH = PROJECT_ROOT / "tests" / "fixtures" / "minimal_human_maya.bvh"
 
@@ -15,11 +18,15 @@ class HumanReplayPhase4Test(unittest.TestCase):
     def test_bvh_foot_frame_orientation_overrides_are_registered(self) -> None:
         sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
         try:
-            from human_replay import FOOT_FRAME_KEYPOINTS_BY_FORMAT
+            from human_replay import FOOT_FRAME_KEYPOINTS_BY_FORMAT, THIGH_FRAME_KEYPOINTS_BY_FORMAT
         finally:
             sys.path.pop(0)
 
         for source_format in ("pns", "v3"):
+            thigh_overrides = THIGH_FRAME_KEYPOINTS_BY_FORMAT[source_format]
+            self.assertEqual(thigh_overrides["left_thigh"], ("left_hip", "left_thigh"))
+            self.assertEqual(thigh_overrides["right_thigh"], ("right_hip", "right_thigh"))
+
             overrides = FOOT_FRAME_KEYPOINTS_BY_FORMAT[source_format]
             self.assertEqual(
                 overrides["left_calf"],
@@ -29,6 +36,35 @@ class HumanReplayPhase4Test(unittest.TestCase):
                 overrides["right_calf"],
                 ("right_thigh", "right_calf", "right_foot", "right_toe"),
             )
+
+    def test_thigh_frame_orientation_uses_pelvis_facing_for_twist(self) -> None:
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+        try:
+            from human_replay import apply_format_thigh_orientation_overrides
+        finally:
+            sys.path.pop(0)
+
+        keypoint_names = ["hips_mean", "left_hip", "left_thigh", "right_hip", "right_thigh"]
+        positions = np.zeros((1, len(keypoint_names), 3), dtype=np.float32)
+        idx = {name: i for i, name in enumerate(keypoint_names)}
+        positions[0, idx["left_hip"]] = [0.0, 0.10, 1.0]
+        positions[0, idx["right_hip"]] = [0.0, -0.10, 1.0]
+        positions[0, idx["left_thigh"]] = [0.0, 0.10, 0.5]
+        positions[0, idx["right_thigh"]] = [0.0, -0.10, 0.5]
+        quaternions = np.zeros((1, len(keypoint_names), 4), dtype=np.float32)
+        quaternions[:, :, 0] = 1.0
+
+        adjusted = apply_format_thigh_orientation_overrides(
+            source_format="pns",
+            keypoint_names=keypoint_names,
+            keypoint_positions=positions,
+            keypoint_quaternions=quaternions,
+        )
+
+        for name in ("left_thigh", "right_thigh"):
+            rot = Rotation.from_quat(adjusted[0, idx[name], [1, 2, 3, 0]])
+            self.assertTrue(np.allclose(rot.apply([1.0, 0.0, 0.0]), [1.0, 0.0, 0.0], atol=1e-6))
+            self.assertTrue(np.allclose(rot.apply([0.0, 0.0, 1.0]), [0.0, 0.0, 1.0], atol=1e-6))
 
     def test_human_replay_help(self) -> None:
         result = subprocess.run(
