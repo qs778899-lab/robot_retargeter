@@ -89,6 +89,7 @@ BVH adapter 或入口至少应输出：
 - robot 在空中：优先查 keypoints pkl 中 `left_calf/right_calf` 或足端目标的最低 Z。如果最低 Z 仍在 1m 左右，说明 adapter 没有做 ground alignment，而不是 IK 本身的问题。
 - 身高异常到 300cm 级：优先检查 BVH parser 是否把非 root joint 的 `OFFSET` 和 position channel 双加。
 - 小腿方向大体跟随但脚尖朝向错误：检查 ankle/calf keypoint quaternion 是否误用 knee->ankle 向量构造。若 BVH 有 foot/toe/End Site，脚掌前向应参与 ankle/foot orientation。
+- 机器人整体姿态合理但脚容易悬浮：检查 `contact_names/contact_states` 是否为空或过稀疏；确认 foot/toe contact 点已经追加到 keypoints，且 contact state 是基于最终保存、完成 ground/contact height alignment 后的 keypoints 重新计算。若对齐后足端高度接近地面但 contact active count 仍很低，优先修正 contact 判定顺序，不要先调 IK cost。
 - 大腿以下 link 相对大腿扭转、hip_yaw 大面积接近限位、但左右脚位置没有镜像或交叉：检查 thigh/knee keypoint quaternion 是否只用单根大腿向量构造。正确构造必须用 pelvis facing 固定 twist。
 - 双臂肘部往身体中线凹陷：先查左右手臂目标相对 `shoulder_mean` 的 MuJoCo Y 符号。左臂应主要在 +Y，右臂应主要在 -Y；如果左右差异落在 X 或 Z，通常是 lateral/forward 轴映射错。若符号正确但肩中心偏移，再查 `LeftShoulder/RightShoulder` 是否接入 mapping，`shoulder_mean` 是否优先使用真实肩点。
 - 手臂位置目标正确但 robot 手臂仍内凹：对比关闭手臂 orientation cost 前后的 elbow/wrist 位置误差。若误差显著下降，说明 BVH 手臂 orientation/roll 与机器人自由度冲突，应保留位置目标、降低手臂 orientation cost。

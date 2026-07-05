@@ -257,3 +257,30 @@
   - 先保留 `0a9e956` 作为“动作整体合理但脚易悬浮”的明确基线。
   - 后续修复聚焦 foot/contact/ground，不回退 thigh/knee frame 和 foot-frame 几何构造。
   - 排查顺序：robot FK 足端高度分布、root z、keypoints `contact_states` 是否为空、`robot_retarget.py` contact target 是否真正接入。
+
+## 2026-07-05：修复 foot floating 的 contact state 对齐问题
+
+- 用户确认 `0a9e956` 后，已提交基线标记 `474f130 Mark BVH adapter visual baseline`：动作整体合理，但脚容易悬浮空中。
+- 根因排查：
+  - `human_replay.py` 原先没有为 BVH pkl 写入 robot config 的 foot/toe contact 点，`robot_retarget.py` 无法稳定启用足端接触约束。
+  - 第一版 contact patch 能追加 `left_foot_end_link/left_toe_link/right_foot_end_link/right_toe_link`，但 `contact_states` 是按 contact height alignment 之前的位置计算；高度对齐后足端已经更接近地面，保存的 contact state 仍然过稀疏。
+  - 这属于 adapter 边界的状态不一致，不是 PNS 特殊 IK cost 问题。
+- 修复：
+  - `human_replay.py` 追加 robot foot/toe contact keypoints，local offset 来自 G1 MJCF 中 `calf -> foot_end/toe` 的局部位置。
+  - 保存 `contact_names/contact_states`，手部 contact 仍保留名称兼容但状态强制为 false。
+  - contact 计算顺序改为：初判 contact -> 高度对齐 -> 基于对齐后的 keypoints 迭代重判 contact -> 用最终 contact state 从原始 keypoints 生成最终高度对齐，并保存同一份 contact state。
+- 重生成标准输出：
+  - PNS：`output_data/robot_motion/pick_up2274_chr00_g1.csv`，shape `(1835, 36)`。
+  - v3：`output_data/robot_motion/Hand-Reaching-62-pangyiming-v3-1-pangyiming-v3_g1.csv`，shape `(208, 36)`。
+- 数值门禁结果：
+  - PNS contact active counts：`[1368, 1448, 1402, 1430, 0, 0]`，对应 `left_foot_end/left_toe/right_foot_end/right_toe/left_wrist/right_wrist`。
+  - PNS sampled foot/toe Z：`min=-0.1098, mean=0.0137, max=0.1816`；上一版 contact patch 为 `mean=0.0247`，`0a9e956` 基线为 `mean=0.0686`。
+  - PNS active contact Z：`left_foot_end mean=0.0114`、`left_toe mean=0.0013`、`right_foot_end mean=0.0080`、`right_toe mean=0.0043`。
+  - PNS cross：`target_global=354`、`robot_global=349`、`target_local=0`、`robot_local=0`。
+  - v3 回归：contact active counts `[208, 208, 208, 208, 0, 0]`；sampled foot/toe Z `min=-0.0201, mean=0.0015, max=0.0176`；cross 全部为 `0`。
+- 测试：
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m py_compile scripts/human_adapters/*.py scripts/human_replay.py scripts/robot_retarget.py`：通过。
+  - `/home/lab/miniconda3/envs/robot_retargeter/bin/python -m unittest tests.test_human_adapters_phase2 tests.test_human_adapters_phase3 tests.test_human_replay_phase4`：通过，14 个测试。
+- 当前状态：
+  - 数值上 foot floating 明显改善，但 `followup_pns_leg` 仍等待用户用完整 viewer 可视化确认，暂不标记 PASSED。
+  - 当前会话 token 消耗无法从本地工具精确读取；最终 COMPLETE 前需补充可获得的总 token 使用量或说明不可得原因。

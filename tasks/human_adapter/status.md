@@ -11,4 +11,4 @@ task_status: IN_PROGRESS
 | phase_4 | PASSED | human_replay.py --help、单 BVH no-viewer smoke、pkl schema 和 Phase 2/3 回归测试通过 |
 | phase_5 | PASSED | PNS/v3 keypoints pkl 生成、g1 robot_retarget smoke、CSV 行数检查和全量回归测试通过 |
 | followup_v3_visual | PASSED | v3 完整动作可视化已由用户确认正常；修复包括 FK position channel、自动轴、ground alignment 和手臂 orientation override |
-| followup_pns_leg | IN_PROGRESS | 用户确认 `0a9e956` 动作整体合理，但脚容易悬浮空中；当前继续解决 foot floating/contact 问题，未标记 PASSED |
+| followup_pns_leg | IN_PROGRESS | 用户确认 `0a9e956` 动作整体合理；已修复 contact state 与高度对齐 keypoints 不一致导致的足端约束稀疏，等待用户可视化确认后才能标记 PASSED |

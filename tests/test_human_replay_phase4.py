@@ -121,11 +121,27 @@ class HumanReplayPhase4Test(unittest.TestCase):
             self.assertEqual(payload["positions"].shape[-1], 3)
             self.assertEqual(payload["quaternions"].shape[0], 2)
             self.assertEqual(payload["quaternions"].shape[-1], 4)
-            self.assertEqual(payload["contact_states"].shape, (2, 0))
+            self.assertEqual(
+                payload["contact_names"],
+                [
+                    "left_foot_end_link",
+                    "left_toe_link",
+                    "right_foot_end_link",
+                    "right_toe_link",
+                    "left_wrist_yaw_link",
+                    "right_wrist_yaw_link",
+                ],
+            )
+            self.assertEqual(payload["contact_states"].shape, (2, 6))
+            self.assertGreater(int(np.sum(payload["contact_states"][:, :4])), 0)
+            self.assertFalse(bool(np.any(payload["contact_states"][:, 4:])))
             self.assertEqual(len(payload["keypoint_names"]), payload["positions"].shape[1])
+            for contact_name in payload["contact_names"][:4]:
+                self.assertIn(contact_name, payload["keypoint_names"])
             orientation_scales = payload["ik_orientation_cost_scales"]
             self.assertEqual(orientation_scales["left_arm"], 0.0)
             self.assertEqual(orientation_scales["right_fore_arm"], 0.0)
+            self.assertIn("contact_active_counts=", result.stdout)
             self.assertIn("z_shift=", result.stdout)
 
             keypoint_idx = {name: idx for idx, name in enumerate(payload["keypoint_names"])}

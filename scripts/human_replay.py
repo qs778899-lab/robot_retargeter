@@ -8,6 +8,7 @@ import pickle
 from pathlib import Path
 
 import numpy as np
+import yaml
 from scipy.spatial.transform import Rotation
 
 from human_adapters import (
@@ -81,6 +82,18 @@ FOOT_FRAME_KEYPOINTS_BY_FORMAT = {
         "left_calf": ("left_thigh", "left_calf", "left_foot", "left_toe"),
         "right_calf": ("right_thigh", "right_calf", "right_foot", "right_toe"),
     },
+}
+
+CONTACT_ANCHOR_LINKS = {
+    "left_foot_end": "left_calf",
+    "left_toe": "left_calf",
+    "right_foot_end": "right_calf",
+    "right_toe": "right_calf",
+}
+
+CONTACT_SOURCE_FALLBACKS = {
+    "left_wrist_yaw_link": "left_fore_arm",
+    "right_wrist_yaw_link": "right_fore_arm",
 }
 
 THIGH_FRAME_KEYPOINTS_BY_FORMAT = {
@@ -275,6 +288,35 @@ def load_path_field(config_path: Path, field_name: str) -> Path:
     raise ValueError(f"Missing {field_name} in {config_path}")
 
 
+def load_yaml_config(config_path: Path) -> dict:
+    with config_path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Config must contain a mapping: {config_path}")
+    return data
+
+
+def load_yaml_body_list_config(config_path: Path, field_name: str) -> tuple[str, ...]:
+    data = load_yaml_config(config_path)
+    value = data.get(field_name)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Missing or invalid list field '{field_name}' in {config_path}")
+    items = tuple(str(item).strip() for item in value if str(item).strip())
+    if not items:
+        raise ValueError(f"'{field_name}' must contain at least one body name in {config_path}")
+    return items
+
+
+def load_scalar_int_config(config_path: Path, field_name: str, default: int) -> int:
+    value = load_yaml_config(config_path).get(field_name, default)
+    return int(value)
+
+
+def load_scalar_float_config(config_path: Path, field_name: str, default: float) -> float:
+    value = load_yaml_config(config_path).get(field_name, default)
+    return float(value)
+
+
 def compute_robot_link_lengths_and_body_poses(
     robot_config: Path,
 ) -> tuple[dict[str, float], dict[str, np.ndarray], dict[str, np.ndarray]]:
@@ -300,6 +342,30 @@ def compute_robot_link_lengths_and_body_poses(
         body_quaternions[parent_body] = data.xquat[parent_id].copy()
         body_quaternions[child_body] = data.xquat[child_id].copy()
     return lengths, body_positions, body_quaternions
+
+
+def compute_robot_body_local_offset(
+    robot_xml: Path,
+    *,
+    anchor_body: str,
+    target_body: str,
+) -> np.ndarray:
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(robot_xml))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    anchor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, anchor_body)
+    target_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, target_body)
+    if anchor_id < 0:
+        raise ValueError(f"Missing robot anchor body: {anchor_body}")
+    if target_id < 0:
+        raise ValueError(f"Missing robot target body: {target_body}")
+
+    anchor_rot = data.xmat[anchor_id].reshape(3, 3)
+    local_offset = anchor_rot.T @ (data.xpos[target_id] - data.xpos[anchor_id])
+    return local_offset.astype(np.float32)
 
 
 def normalize_vectors(vectors: np.ndarray, eps: float = 1e-8) -> np.ndarray:
@@ -352,12 +418,141 @@ def multiply_quaternions_wxyz(q_left: np.ndarray, q_right: np.ndarray) -> np.nda
     return normalize_vectors(result).astype(np.float32)
 
 
+def quat_rotate_vectors_wxyz(quaternions: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    vectors = np.broadcast_to(vector.astype(np.float32), (quaternions.shape[0], 3))
+    rotated = Rotation.from_quat(quaternions[:, [1, 2, 3, 0]]).apply(vectors)
+    return rotated.astype(np.float32)
+
+
 def quat_from_vectors_wxyz(v_from: np.ndarray, v_to: np.ndarray) -> np.ndarray:
     from_u = normalize_vectors(np.asarray(v_from, dtype=np.float64))
     to_u = normalize_vectors(np.asarray(v_to, dtype=np.float64))
     rotation, _rssd = Rotation.align_vectors(to_u, from_u)
     quat_xyzw = rotation.as_quat()
     return quat_xyzw[[3, 0, 1, 2]].astype(np.float32)
+
+
+def canonicalize_contact_name(body_name: str) -> str:
+    lower = body_name.lower()
+    if "left" in lower and "toe" in lower:
+        return "left_toe"
+    if "right" in lower and "toe" in lower:
+        return "right_toe"
+    if "left" in lower and "foot" in lower and "end" in lower:
+        return "left_foot_end"
+    if "right" in lower and "foot" in lower and "end" in lower:
+        return "right_foot_end"
+    if "left" in lower and ("hand" in lower or "wrist" in lower):
+        return "left_hand"
+    if "right" in lower and ("hand" in lower or "wrist" in lower):
+        return "right_hand"
+    return body_name
+
+
+def compute_windowed_point_speeds(point_positions: np.ndarray, fps: float, window: int) -> np.ndarray:
+    if fps <= 0.0:
+        raise ValueError(f"FPS must be positive, got {fps}")
+    if window <= 0:
+        raise ValueError(f"Window must be positive, got {window}")
+
+    speeds = np.zeros(point_positions.shape[:2], dtype=np.float32)
+    half_window = max(1, window // 2)
+    for frame_idx in range(point_positions.shape[0]):
+        start_idx = max(0, frame_idx - half_window)
+        end_idx = min(point_positions.shape[0] - 1, frame_idx + half_window)
+        frame_delta = end_idx - start_idx
+        if frame_delta <= 0:
+            continue
+        displacement = point_positions[end_idx] - point_positions[start_idx]
+        speeds[frame_idx] = np.linalg.norm(displacement, axis=-1) / (frame_delta / fps)
+    return speeds
+
+
+def compute_contact_states(
+    contact_positions: np.ndarray,
+    *,
+    fps: float,
+    vel_window: int,
+    vel_threshold: float,
+    height_threshold: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    contact_speeds = compute_windowed_point_speeds(contact_positions, fps=fps, window=vel_window)
+    contact_states = np.logical_and(
+        contact_speeds <= float(vel_threshold),
+        contact_positions[:, :, 2] <= float(height_threshold),
+    )
+    return contact_speeds.astype(np.float32), contact_states.astype(np.bool_)
+
+
+def apply_low_pass_filter(values: np.ndarray, alpha: float) -> np.ndarray:
+    filtered = values.astype(np.float32).copy()
+    for frame_idx in range(1, filtered.shape[0]):
+        filtered[frame_idx] = float(alpha) * filtered[frame_idx] + (1.0 - float(alpha)) * filtered[
+            frame_idx - 1
+        ]
+    return filtered
+
+
+def gather_contact_positions(
+    *,
+    keypoint_names: list[str],
+    keypoints: np.ndarray,
+    contact_names: tuple[str, ...],
+) -> np.ndarray:
+    keypoint_idx = {name: idx for idx, name in enumerate(keypoint_names)}
+    contact_positions = np.zeros((keypoints.shape[0], len(contact_names), 3), dtype=np.float32)
+    for contact_idx, contact_name in enumerate(contact_names):
+        source_name = contact_name
+        if source_name not in keypoint_idx:
+            source_name = CONTACT_SOURCE_FALLBACKS.get(contact_name, "")
+        if source_name not in keypoint_idx:
+            raise ValueError(f"Cannot resolve contact source keypoint for robot body: {contact_name}")
+        contact_positions[:, contact_idx, :] = keypoints[:, keypoint_idx[source_name], :]
+    return contact_positions
+
+
+def force_non_foot_contacts_inactive(contact_names: tuple[str, ...], contact_states: np.ndarray) -> np.ndarray:
+    filtered = contact_states.copy()
+    for contact_idx, contact_name in enumerate(contact_names):
+        if canonicalize_contact_name(contact_name) not in CONTACT_ANCHOR_LINKS:
+            filtered[:, contact_idx] = False
+    return filtered
+
+
+def offset_keypoints_by_contact_height(
+    *,
+    keypoint_names: list[str],
+    keypoints: np.ndarray,
+    contact_names: tuple[str, ...],
+    contact_positions: np.ndarray,
+    contact_states: np.ndarray,
+    height_lpf_alpha: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    keypoint_idx = {name: idx for idx, name in enumerate(keypoint_names)}
+    height_offsets = np.zeros(contact_positions.shape[0], dtype=np.float32)
+    last_height = 0.0
+    for frame_idx in range(contact_positions.shape[0]):
+        active_contact_indices = np.flatnonzero(contact_states[frame_idx])
+        if active_contact_indices.size == 0:
+            height_offsets[frame_idx] = last_height
+            continue
+
+        active_heights: list[float] = []
+        for contact_idx in active_contact_indices:
+            contact_name = contact_names[contact_idx]
+            keypoint_name = contact_name if contact_name in keypoint_idx else None
+            if keypoint_name is not None:
+                active_heights.append(float(keypoints[frame_idx, keypoint_idx[keypoint_name], 2]))
+            else:
+                active_heights.append(float(contact_positions[frame_idx, contact_idx, 2]))
+        last_height = min(active_heights)
+        height_offsets[frame_idx] = last_height
+
+    if height_offsets.shape[0] > 1 and float(height_lpf_alpha) < 1.0:
+        height_offsets = apply_low_pass_filter(height_offsets, alpha=height_lpf_alpha)
+    adjusted = keypoints.copy()
+    adjusted[:, :, 2] -= height_offsets[:, None]
+    return adjusted.astype(np.float32), height_offsets
 
 
 def align_semantic_link_quaternions(
@@ -505,6 +700,69 @@ def align_keypoints_to_robot_ground(
     return aligned, z_shift, observed_min, desired_min, support_links
 
 
+def append_robot_contact_keypoints(
+    *,
+    keypoint_names: list[str],
+    keypoints: np.ndarray,
+    quaternions: np.ndarray,
+    robot_links: dict[str, tuple[str, str]],
+    robot_config: Path,
+) -> tuple[list[str], np.ndarray, np.ndarray, tuple[str, ...], np.ndarray]:
+    robot_xml = resolve_project_path(load_path_field(robot_config, "robot_xml_path"))
+    contact_names = load_yaml_body_list_config(robot_config, "contact_links")
+    contact_name_to_body = {
+        canonicalize_contact_name(body_name): body_name for body_name in contact_names
+    }
+
+    updated_names = list(keypoint_names)
+    updated_keypoints = keypoints
+    updated_quaternions = quaternions
+    keypoint_idx = {name: idx for idx, name in enumerate(updated_names)}
+
+    extra_positions: list[np.ndarray] = []
+    extra_quaternions: list[np.ndarray] = []
+    extra_names: list[str] = []
+    for canonical_name, anchor_link_name in CONTACT_ANCHOR_LINKS.items():
+        target_body_name = contact_name_to_body.get(canonical_name)
+        if target_body_name is None or target_body_name in keypoint_idx:
+            continue
+        if anchor_link_name not in robot_links:
+            raise ValueError(f"Missing robot link required for contact keypoint: {anchor_link_name}")
+        anchor_body_name = robot_links[anchor_link_name][1]
+        anchor_idx = keypoint_idx[anchor_link_name]
+        local_offset = compute_robot_body_local_offset(
+            robot_xml,
+            anchor_body=anchor_body_name,
+            target_body=target_body_name,
+        )
+        extra_positions.append(
+            updated_keypoints[:, anchor_idx, :] + quat_rotate_vectors_wxyz(
+                updated_quaternions[:, anchor_idx, :], local_offset
+            )
+        )
+        extra_quaternions.append(updated_quaternions[:, anchor_idx, :])
+        extra_names.append(target_body_name)
+
+    if extra_positions:
+        updated_keypoints = np.concatenate([updated_keypoints, np.stack(extra_positions, axis=1)], axis=1)
+        updated_quaternions = np.concatenate(
+            [updated_quaternions, np.stack(extra_quaternions, axis=1)], axis=1
+        )
+        updated_names.extend(extra_names)
+        keypoint_idx = {name: idx for idx, name in enumerate(updated_names)}
+
+    contact_positions = np.zeros((updated_keypoints.shape[0], len(contact_names), 3), dtype=np.float32)
+    for contact_idx, contact_name in enumerate(contact_names):
+        source_name = contact_name
+        if source_name not in keypoint_idx:
+            source_name = CONTACT_SOURCE_FALLBACKS.get(contact_name, "")
+        if source_name not in keypoint_idx:
+            raise ValueError(f"Cannot resolve contact source keypoint for robot body: {contact_name}")
+        contact_positions[:, contact_idx, :] = updated_keypoints[:, keypoint_idx[source_name], :]
+
+    return updated_names, updated_keypoints, updated_quaternions, contact_names, contact_positions
+
+
 def apply_format_foot_orientation_overrides(
     *,
     source_format: str,
@@ -612,16 +870,23 @@ def save_keypoints_pkl(
     positions: np.ndarray,
     quaternions: np.ndarray,
     fps: float,
+    contact_names: tuple[str, ...] | None = None,
+    contact_states: np.ndarray | None = None,
     orientation_cost_scales: dict[str, float] | None = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_contact_names = list(contact_names or [])
+    if contact_states is None:
+        resolved_contact_states = np.zeros((positions.shape[0], 0), dtype=np.bool_)
+    else:
+        resolved_contact_states = contact_states.astype(np.bool_)
     payload = {
         "keypoint_names": keypoint_names,
         "positions": positions.astype(np.float32),
         "quaternions": quaternions.astype(np.float32),
         "fps": float(fps),
-        "contact_names": [],
-        "contact_states": np.zeros((positions.shape[0], 0), dtype=np.bool_),
+        "contact_names": resolved_contact_names,
+        "contact_states": resolved_contact_states,
     }
     if orientation_cost_scales:
         payload["ik_orientation_cost_scales"] = {
@@ -698,6 +963,64 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         key_frame_offsets=key_frame_offsets,
         key_frame_axis_maps=key_frame_axis_maps,
     )
+    (
+        keypoint_names,
+        keypoints,
+        quaternions,
+        contact_names,
+        contact_positions,
+    ) = append_robot_contact_keypoints(
+        keypoint_names=keypoint_names,
+        keypoints=keypoints,
+        quaternions=quaternions,
+        robot_links=robot_links,
+        robot_config=robot_config,
+    )
+    contact_vel_window = load_scalar_int_config(robot_config, "contact_vel_calculate_window", default=6)
+    contact_vel_threshold = load_scalar_float_config(robot_config, "contact_vel_threshold", default=0.5)
+    contact_height_threshold = load_scalar_float_config(robot_config, "contact_height_threshold", default=0.05)
+    contact_height_lpf_alpha = 1.0
+    _contact_speeds, contact_states = compute_contact_states(
+        contact_positions,
+        fps=semantic.fps,
+        vel_window=contact_vel_window,
+        vel_threshold=contact_vel_threshold,
+        height_threshold=contact_height_threshold,
+    )
+    contact_states = force_non_foot_contacts_inactive(contact_names, contact_states)
+
+    base_keypoints = keypoints
+    for _contact_refine_idx in range(2):
+        refined_keypoints, _refined_offsets = offset_keypoints_by_contact_height(
+            keypoint_names=keypoint_names,
+            keypoints=base_keypoints,
+            contact_names=contact_names,
+            contact_positions=contact_positions,
+            contact_states=contact_states,
+            height_lpf_alpha=contact_height_lpf_alpha,
+        )
+        refined_contact_positions = gather_contact_positions(
+            keypoint_names=keypoint_names,
+            keypoints=refined_keypoints,
+            contact_names=contact_names,
+        )
+        _contact_speeds, contact_states = compute_contact_states(
+            refined_contact_positions,
+            fps=semantic.fps,
+            vel_window=contact_vel_window,
+            vel_threshold=contact_vel_threshold,
+            height_threshold=contact_height_threshold,
+        )
+        contact_states = force_non_foot_contacts_inactive(contact_names, contact_states)
+
+    keypoints, contact_height_offsets = offset_keypoints_by_contact_height(
+        keypoint_names=keypoint_names,
+        keypoints=base_keypoints,
+        contact_names=contact_names,
+        contact_positions=contact_positions,
+        contact_states=contact_states,
+        height_lpf_alpha=contact_height_lpf_alpha,
+    )
 
     output_dir = args.output_dir
     if output_dir is None:
@@ -712,6 +1035,8 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         positions=keypoints,
         quaternions=quaternions,
         fps=semantic.fps,
+        contact_names=contact_names,
+        contact_states=contact_states,
         orientation_cost_scales=BVH_IK_ORIENTATION_COST_SCALES,
     )
 
@@ -724,6 +1049,9 @@ def convert_one(args: argparse.Namespace, source, mapping) -> Path:
         f"axis_transform={axis_transform.tolist()} "
         f"ground_links={ground_links} observed_ground_z={observed_ground_z:.6g} "
         f"target_ground_z={target_ground_z:.6g} z_shift={z_shift:.6g} "
+        f"contact_names={contact_names} contact_active_counts={np.sum(contact_states, axis=0).astype(int).tolist()} "
+        f"contact_height_offset_range=({float(np.min(contact_height_offsets)):.6g}, "
+        f"{float(np.max(contact_height_offsets)):.6g}) "
         f"head_minus_feet_mean={raw_debug.head_minus_feet_mean} "
         f"left_right_hip_delta_mean={raw_debug.left_right_hip_delta_mean} "
         f"foot_to_toe_delta_mean={raw_debug.foot_to_toe_delta_mean}"
